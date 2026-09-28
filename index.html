@@ -106,6 +106,7 @@ a { color: var(--accent); }
 .card-actions a, .card-actions button { flex: 1; min-height: 44px; display: flex; align-items: center; justify-content: center;
   gap: 6px; text-decoration: none; color: var(--accent); font-weight: 600; font-size: 14px; background: none; border: 0; }
 .card-actions > * + * { border-left: 1px solid var(--line); }
+.card-actions .delete { color: var(--bad); }
 
 /* ---------- sheets (detail, settings) ---------- */
 .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 20; opacity: 0; pointer-events: none;
@@ -172,6 +173,18 @@ textarea { min-height: 88px; resize: vertical; }
 #toast-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toast button { flex: none; background: none; border: 0; color: inherit; font-weight: 700; padding: 8px 10px;
   text-decoration: underline; text-underline-offset: 3px; min-height: 40px; }
+/* ---------- preferences ---------- */
+.pref-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; }
+.pref-row + .pref-row { border-top: 1px solid var(--line); }
+.stepper { display: flex; align-items: center; gap: 10px; }
+.stepper b { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
+.stepper button { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface-2);
+  font-size: 20px; line-height: 1; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.seg button { min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-size: 13.5px; font-weight: 600; }
+.seg button.on, .chip.toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip.toggle { min-height: 40px; font-weight: 600; }
+.chip .x { border: 0; background: none; padding: 0 0 0 6px; color: var(--muted); font-size: 13px; }
 .banner { margin: 0 16px 10px; padding: 10px 12px; border-radius: 12px; background: var(--bad-soft); color: var(--bad); font-size: 14px; }
 </style>
 </head>
@@ -203,6 +216,7 @@ textarea { min-height: 88px; resize: vertical; }
     <div class="titlebar">
       <h1>Rentals</h1>
       <span class="sync"><span class="dot" id="dot"></span><span id="sync-text"></span></span>
+      <button class="icon-btn" id="prefs" aria-label="Search preferences">✏️</button>
       <button class="icon-btn" id="refresh" aria-label="Refresh">↻</button>
       <button class="icon-btn" id="settings" aria-label="Settings">⚙︎</button>
     </div>
@@ -233,7 +247,7 @@ const STAGES = [
 ];
 const STAGE = Object.fromEntries(STAGES.map(s => [s.key, s]));
 const CHASE_AFTER_H = 48;
-const BOARD_PATH = "data/board.json", LISTINGS_PATH = "data/listings.json";
+const BOARD_PATH = "data/board.json", LISTINGS_PATH = "data/listings.json", PREFS_PATH = "data/preferences.json";
 
 const ls = {
   get(k, d = null) { try { const v = localStorage.getItem("rb:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -309,12 +323,13 @@ async function fetchBoard() {
   const j = await res.json();
   return { board: JSON.parse(b64decode(j.content)), sha: j.sha };
 }
-async function putBoard(next, sha, desc) {
-  const body = { message: `Board: ${desc}${cfg.name ? ` (${cfg.name})` : ""}`,
-                 content: b64encode(JSON.stringify(next, null, 1) + "\n") };
+async function putFile(path, obj, sha, message) {
+  const body = { message: `${message}${cfg.name ? ` (${cfg.name})` : ""}`,
+                 content: b64encode(JSON.stringify(obj, null, 1) + "\n") };
   if (sha) body.sha = sha;
-  return gh(BOARD_PATH, { method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+  return gh(path, { method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
 }
+const putBoard = (next, sha, desc) => putFile(BOARD_PATH, next, sha, `Board: ${desc}`);
 function httpError(res) {
   const e = new Error(res.status === 401 ? "GitHub rejected the token. Check it in Settings."
     : res.status === 403 ? "The token can't access that repo. It needs Contents: Read and write."
@@ -371,21 +386,23 @@ async function flush() {
 }
 
 async function load(quiet = false) {
-  if (!quiet) setSync("busy");
+  if (!quiet) setSync("busy", "Updating…");
   try {
     const [l, b] = await Promise.all([fetchListings(), fetchBoard()]);
     listings = l; server = b; rebuild(); render(); setSync("ok");
+    ls.set(cacheKey(), { listings, board: server.board });  // instant board on the next open/refresh
     if (pending.length) flush();
     return true;
   } catch (e) { setSync("err", e.message); return false; }
 }
+const cacheKey = () => "cache:" + cfg.repo;
 
 let lastSynced = null;
 function setSync(state, msg) {
   const dot = $("dot"); dot.className = "dot" + (state === "busy" ? " busy" : state === "err" ? " err" : "");
   if (state === "ok") lastSynced = Date.now();
-  $("sync-text").textContent = state === "busy" ? "Saving…" : state === "err" ? "Offline" : "Synced";
-  $("banner").classList.toggle("hidden", state !== "err");
+  $("sync-text").textContent = state === "busy" ? (msg || "Saving…") : state === "err" ? "Offline" : "Synced";
+  if (state !== "busy") $("banner").classList.toggle("hidden", state !== "err");
   if (state === "err") $("banner").textContent = msg || "Couldn't reach GitHub.";
 }
 
@@ -393,7 +410,16 @@ function setSync(state, msg) {
 function visibleIds() {
   const ids = new Set(Object.keys(board.cards));
   for (const [id, l] of Object.entries(listings)) if (l.status === "match") ids.add(id);
-  return [...ids].filter(id => listings[id]);
+  // deleted cards stay in board.json (so the hunter never re-adds them as New) but aren't shown
+  return [...ids].filter(id => listings[id] && cardOf(id).status !== "deleted");
+}
+
+function deleteCard(id) {
+  if (openId === id) closeSheet();
+  mutate(`Deleted: ${shortAddr(listings[id].address)}`, b => {
+    const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+    c.deleted_from = c.status; c.status = "deleted"; c.updated = nowIso();
+  });
 }
 const lastContact = c => (c.contacts || []).at(-1);
 const needsChase = c => c.status === "contacted" && lastContact(c) && hoursSince(lastContact(c).at) > CHASE_AFTER_H;
@@ -429,7 +455,7 @@ function render() {
 }
 const bgUrl = u => `background-image:url('${encodeURI(u).replace(/'/g, "%27")}')`;
 function emptyText(k) {
-  return { new: "No new listings. The hunter checks every hour.",
+  return { new: "No new listings. Your personal agent checks every hour.",
            contacted: "Tap Call or Text on a new listing and it moves here.",
            viewing: "Book a viewing from a contacted listing.",
            viewed: "Viewings you've been to land here.",
@@ -505,6 +531,8 @@ function cardHtml(id) {
     } else {
       actions = `<a href="${esc(searchUrl(l))}" target="_blank" rel="noopener">🔎 Search for this listing</a>`;
     }
+  } else if (c.status === "rejected") {
+    actions = `<button class="delete" data-delete="${esc(id)}" aria-label="Delete ${esc(shortAddr(l.address))}">🗑 Delete</button>`;
   }
   return `<article class="card" style="--c:${s.c}">
     <button class="card-main" data-open="${esc(id)}">
@@ -584,7 +612,8 @@ function openSheet(id) {
   if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
 }
 function closeSheet() {
-  openId = null; $("sheet").classList.remove("open"); $("scrim").classList.remove("open");
+  openId = null; prefsOpen = false; sheetKey = null;
+  $("sheet").classList.remove("open"); $("scrim").classList.remove("open");
   history.replaceState(null, "", location.pathname + location.search);
 }
 
@@ -663,7 +692,8 @@ function renderSheet(force = false) {
 
     <div class="section row">
       ${c.status !== "shortlist" ? `<button class="btn" data-stage="shortlist">⭐ Shortlist</button>` : ""}
-      ${c.status !== "rejected" ? `<button class="btn danger" data-stage="rejected">✖ Reject</button>` : ""}
+      ${c.status !== "rejected" ? `<button class="btn danger" data-stage="rejected">✖ Reject</button>`
+        : `<button class="btn danger" data-delete="${esc(id)}">🗑 Delete</button>`}
     </div>`;
 }
 
@@ -678,6 +708,7 @@ function setStage(id, status) {
 // ============================================================ events
 document.addEventListener("click", e => {
   const t = e.target;
+  if (prefsOpen && t.closest("#sheet-body") && prefsClick(t)) return;
   const contact = t.closest("[data-contact]");
   if (contact) {  // let the tel:/sms:/mailto: link open first; re-rendering now would detach it
     const { contact: id, method } = contact.dataset;
@@ -689,6 +720,8 @@ document.addEventListener("click", e => {
   const tab = t.closest("[data-col]");
   if (tab) { const col = $("board").children[+tab.dataset.col];
     col?.scrollIntoView({ behavior: "smooth", inline: window.innerWidth < 900 ? "center" : "start", block: "nearest" }); return; }
+  const del = t.closest("[data-delete]");
+  if (del) { deleteCard(del.dataset.delete); return; }
   const stage = t.closest("[data-stage]");
   if (stage && openId) { setStage(openId, stage.dataset.stage); return; }
   const pick = t.closest("[data-pick]");
@@ -727,18 +760,31 @@ document.addEventListener("click", e => {
 });
 $("sheet-close").onclick = closeSheet;
 $("scrim").onclick = closeSheet;
-document.addEventListener("keydown", e => { if (e.key === "Escape" && openId) closeSheet(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && (openId || prefsOpen)) closeSheet(); });
 $("refresh").onclick = () => load();
+$("prefs").onclick = openPrefs;
 $("settings").onclick = () => showSetup(true);
 document.addEventListener("visibilitychange", () => {   // came back to the app: pick up your spouse's changes
   if (document.visibilityState === "visible" && cfg.token && Date.now() - (lastSynced || 0) > 20000) load(true);
 });
 window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (id && listings[id]) openSheet(id); });
 
+// Remember which column you're looking at, so a refresh (or reopening the app)
+// comes back to it instead of jumping to New.
+let viewRestored = false;
+function restoreView() {
+  if (viewRestored) return;
+  const col = $("board").children[ls.get("col", 0)];
+  if (col) $("board").scrollLeft = col.offsetLeft - ($("board").clientWidth - col.offsetWidth) / 2;
+  viewRestored = true;
+  highlightTab();
+}
+
 function highlightTab() {
   const b = $("board"), cols = [...b.children];
   const mid = b.scrollLeft + b.clientWidth / 2;
   let idx = cols.findIndex(c => c.offsetLeft <= mid && c.offsetLeft + c.offsetWidth >= mid);
+  if (viewRestored && idx >= 0) ls.set("col", idx);
   if (window.innerWidth >= 900) idx = -1;
   [...$("tabs").children].forEach((t, i) => t.classList.toggle("on", i === idx));
   const on = $("tabs").children[idx]; on?.scrollIntoView({ inline: "nearest", block: "nearest" });
@@ -753,6 +799,141 @@ function toast(text, onUndo) {
   $("toast-undo").onclick = () => { $("toast").classList.remove("show"); onUndo && onUndo(); };
   $("toast").classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4500);
+}
+
+// ============================================================ search preferences (✏️)
+// Edits data/preferences.json, which the hunter validates and applies on its next run.
+const TYPE_LABELS = { ApartmentUnitFlat: "Apartment", Townhouse: "Townhouse", Terrace: "Terrace",
+                      House: "House", SemiDetached: "Semi", Studio: "Studio" };
+const MODE_LABELS = { must: "Must have", nice: "Nice to have", off: "Don't care" };
+const LIMITS = { max_weekly_rent: [100, 20000], min_bedrooms: [0, 10], min_bathrooms: [0, 10], min_carspaces: [0, 10] };
+let prefs = null, prefsSha = null, draft = null, prefsOpen = false;
+
+async function openPrefs() {
+  if (openId) closeSheet();
+  prefsOpen = true;
+  $("sheet-title").textContent = "Search preferences";
+  $("sheet-body").innerHTML = `<p class="muted" style="margin-top:16px">Loading…</p>`;
+  $("sheet").classList.add("open"); $("scrim").classList.add("open");
+  try {
+    const res = await gh(PREFS_PATH);
+    if (res.status === 404) {
+      $("sheet-body").innerHTML = `<p class="muted" style="margin-top:16px">Preferences are created by your personal agent's next run. Try again after it has run.</p>`;
+      return;
+    }
+    if (!res.ok) throw httpError(res);
+    const j = await res.json();
+    prefs = JSON.parse(b64decode(j.content)); prefsSha = j.sha;
+    prefs.features ||= {}; prefs.property_types ||= []; prefs.suburbs ||= [];
+    draft = clone(prefs);
+    renderPrefs();
+  } catch (e) {
+    $("sheet-body").innerHTML = `<p class="error" style="margin-top:16px">${esc(e.message)}</p>`;
+  }
+}
+
+function prefsChanges() {
+  const out = [];
+  if (draft.max_weekly_rent !== prefs.max_weekly_rent) out.push(`max $${draft.max_weekly_rent}/wk`);
+  for (const [k, u] of [["min_bedrooms", "bed"], ["min_bathrooms", "bath"], ["min_carspaces", "car"]])
+    if (draft[k] !== prefs[k]) out.push(`${draft[k]}+ ${u}`);
+  for (const k of ["pool", "outdoor_space"])
+    if ((draft.features[k] || "off") !== (prefs.features[k] || "off")) out.push(`${k.replace("_", " ")}: ${draft.features[k]}`);
+  const names = a => a.map(s => s.name);
+  names(draft.suburbs).filter(n => !names(prefs.suburbs).includes(n)).forEach(n => out.push(`+${n}`));
+  names(prefs.suburbs).filter(n => !names(draft.suburbs).includes(n)).forEach(n => out.push(`−${n}`));
+  if (JSON.stringify([...draft.property_types].sort()) !== JSON.stringify([...prefs.property_types].sort()))
+    out.push(`types: ${draft.property_types.map(t => TYPE_LABELS[t] || t).join(", ")}`);
+  return out;
+}
+
+function renderPrefs(error = "") {
+  const keep = { name: $("p-sub-name")?.value || "", pc: $("p-sub-pc")?.value || "" };  // don't lose typing
+  const d = draft, changes = prefsChanges();
+  const stepper = (key, label, fmt) => `<div class="pref-row"><span>${label}</span><div class="stepper">
+      <button data-step="${key}" data-dir="-1" aria-label="Less">−</button><b>${esc(fmt(d[key]))}</b>
+      <button data-step="${key}" data-dir="1" aria-label="More">+</button></div></div>`;
+  const seg = key => `<div class="seg">${Object.entries(MODE_LABELS).map(([m, label]) =>
+      `<button data-feat="${key}" data-mode="${m}" class="${(d.features[key] || "off") === m ? "on" : ""}">${label}</button>`).join("")}</div>`;
+  $("sheet-body").innerHTML = `
+    <div class="section"><h3>Suburbs</h3>
+      <div class="chips">${d.suburbs.map((s, i) => `<span class="chip">${esc(s.name)} <span class="muted">${esc(s.postcode)}</span>
+        <button class="x" data-sub-remove="${i}" aria-label="Remove ${esc(s.name)}">✕</button></span>`).join("")}</div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="p-sub-name" placeholder="Add a suburb" value="${esc(keep.name)}" autocapitalize="words">
+        <input type="text" id="p-sub-pc" placeholder="Postcode" inputmode="numeric" maxlength="4" value="${esc(keep.pc)}" style="flex:0 0 108px">
+      </div>
+      <div class="btn-grid"><button class="btn" id="p-sub-add">+ Add suburb</button></div>
+    </div>
+    <div class="section"><h3>Rent and size</h3><div class="panel" style="padding:4px 12px">
+      ${stepper("max_weekly_rent", "Max rent / week", v => "$" + Number(v).toLocaleString())}
+      ${stepper("min_bedrooms", "Bedrooms, at least", String)}
+      ${stepper("min_bathrooms", "Bathrooms, at least", String)}
+      ${stepper("min_carspaces", "Car spaces, at least", String)}
+    </div></div>
+    <div class="section"><h3>Pool</h3>${seg("pool")}</div>
+    <div class="section"><h3>Outdoor space</h3>${seg("outdoor_space")}</div>
+    <div class="section"><h3>Property types</h3><div class="chips">${Object.entries(TYPE_LABELS).map(([k, label]) =>
+      `<button class="chip toggle ${d.property_types.includes(k) ? "on" : ""}" data-ptype="${k}">${label}</button>`).join("")}</div></div>
+    ${error ? `<div class="error">${esc(error)}</div>` : ""}
+    <div class="section">
+      <button class="btn primary" id="p-save" style="width:100%" ${changes.length ? "" : "disabled"}>
+        ${changes.length ? `Save ${changes.length} change${changes.length > 1 ? "s" : ""}` : "No changes"}</button>
+      <p class="muted small">Applies from your personal agent's next hourly run. Listings it has already seen aren't re-checked.
+        “Must have” rejects a listing only when its description clearly lacks the feature.</p>
+    </div>`;
+}
+
+function prefsClick(t) {
+  const step = t.closest("[data-step]");
+  if (step) {
+    const key = step.dataset.step, [lo, hi] = LIMITS[key], by = key === "max_weekly_rent" ? 50 : 1;
+    draft[key] = Math.min(hi, Math.max(lo, (draft[key] || 0) + by * Number(step.dataset.dir)));
+    return renderPrefs(), true;
+  }
+  const feat = t.closest("[data-feat]");
+  if (feat) { draft.features[feat.dataset.feat] = feat.dataset.mode; return renderPrefs(), true; }
+  const ptype = t.closest("[data-ptype]");
+  if (ptype) {
+    const k = ptype.dataset.ptype, has = draft.property_types.includes(k);
+    if (has && draft.property_types.length === 1) return renderPrefs("Keep at least one property type."), true;
+    draft.property_types = has ? draft.property_types.filter(x => x !== k) : [...draft.property_types, k];
+    return renderPrefs(), true;
+  }
+  const rm = t.closest("[data-sub-remove]");
+  if (rm) {
+    if (draft.suburbs.length === 1) return renderPrefs("Keep at least one suburb."), true;
+    draft.suburbs.splice(Number(rm.dataset.subRemove), 1);
+    return renderPrefs(), true;
+  }
+  if (t.id === "p-sub-add") {
+    const name = $("p-sub-name").value.trim().replace(/\s+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const pc = $("p-sub-pc").value.trim();
+    if (!name) return renderPrefs("Type a suburb name."), true;
+    if (!/^\d{4}$/.test(pc)) return renderPrefs("Postcodes are 4 digits, e.g. 2011."), true;
+    if (draft.suburbs.some(s => s.name.toLowerCase() === name.toLowerCase())) return renderPrefs(`${name} is already there.`), true;
+    draft.suburbs.push({ name, postcode: pc });
+    $("p-sub-name").value = ""; $("p-sub-pc").value = "";
+    return renderPrefs(), true;
+  }
+  if (t.id === "p-save") { savePrefs(); return true; }
+  return false;
+}
+
+async function savePrefs() {
+  const changes = prefsChanges(); if (!changes.length) return;
+  $("p-save").disabled = true; $("p-save").textContent = "Saving…";
+  try {
+    let res = await putFile(PREFS_PATH, draft, prefsSha, `Preferences: ${changes.join(", ")}`);
+    if (res.status === 409 || res.status === 422) {  // saved elsewhere meanwhile: your explicit save wins
+      const cur = await gh(PREFS_PATH); prefsSha = cur.ok ? (await cur.json()).sha : null;
+      res = await putFile(PREFS_PATH, draft, prefsSha, `Preferences: ${changes.join(", ")}`);
+    }
+    if (!res.ok) throw httpError(res);
+    prefsSha = (await res.json()).content.sha; prefs = clone(draft);
+    closeSheet();
+    toast("Preferences saved. They apply from the next hourly run.");
+  } catch (e) { renderPrefs(e.message); }
 }
 
 // ============================================================ setup
@@ -776,9 +957,16 @@ $("s-save").onclick = async () => {
 
 async function start() {
   $("setup").classList.add("hidden"); $("app").classList.remove("hidden");
-  const ok = await load();
   const id = location.hash.slice(1);
-  if (ok && id && listings[id]) openSheet(id);
+  const cached = ls.get(cacheKey());
+  if (cached?.listings && cached?.board) {  // show the last board immediately, then refresh it
+    listings = cached.listings; server = { board: cached.board, sha: null };
+    rebuild(); render(); restoreView();
+    if (id && listings[id]) openSheet(id);
+  }
+  const ok = await load();
+  restoreView();
+  if (ok && id && listings[id] && openId !== id) openSheet(id);
   return ok;
 }
 cfg.token ? start() : showSetup();
