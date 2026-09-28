@@ -444,9 +444,18 @@ function specsLine(l) {
   return bits.join(" · ");
 }
 
+// where it came from (if not the Domain search) and criteria it misses (emailed-in listings)
+function originBadges(l) {
+  const out = [];
+  if (l.source && l.source !== "domain") out.push(`<span class="badge grey">${l.source === "email" ? "Emailed in" : "via " + esc(l.source)}</span>`);
+  (l.flags || []).forEach(f => out.push(`<span class="badge warn">⚠ ${esc(f)}</span>`));
+  return out;
+}
+
 function stageLine(id) {
   const l = listings[id], c = cardOf(id), out = [];
   if (!l.active) out.push(`<span class="badge grey">Off market</span>`);
+  out.push(...originBadges(l));
   if (c.status === "new") {
     out.push(`<span class="muted">Found ${ago(l.first_seen)}</span>`);
     const next = (l.inspections || []).find(t => new Date(t) > new Date());
@@ -593,6 +602,7 @@ function renderSheet(force = false) {
       <div class="row1"><span class="rent">${esc(rentText(l))}</span>${l.active ? "" : `<span class="badge grey">Off market</span>`}</div>
       <div class="addr" style="white-space:normal">${esc(l.address)}</div>
       <div class="specs">${esc(specsLine(l))}</div>
+      ${originBadges(l).length ? `<div class="stage-line" style="margin-top:6px">${originBadges(l).join("")}</div>` : ""}
       ${l.pitch ? `<div class="small" style="margin-top:6px;font-style:italic">${esc(l.pitch)}</div>` : ""}
       ${url ? `<div style="margin-top:8px"><a href="${esc(url)}" target="_blank" rel="noopener">Open on Domain →</a></div>` : ""}
     </div>
