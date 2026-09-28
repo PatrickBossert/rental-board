@@ -137,6 +137,7 @@ a { color: var(--accent); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.danger { color: var(--bad); }
 .btn:disabled { opacity: .45; }
+.btn.listening { border-color: var(--bad); color: var(--bad); animation: pulse 1.2s infinite; }
 .log { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
 .log li { display: flex; gap: 8px; }
 .log .when { color: var(--muted); flex: none; min-width: 108px; }
@@ -650,7 +651,44 @@ function openSheet(id) {
   $("sheet").classList.add("open"); $("scrim").classList.add("open");
   if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
 }
+// ============================================================ note dictation
+// Uses the browser's speech recognition where available (Safari, Chrome). Some
+// iPhone home-screen apps don't expose it; the keyboard's own 🎤 works there.
+const speechSupported = () => !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+let dictation = null;
+function setMic() {
+  const b = $("note-mic"); if (!b) return;
+  b.textContent = dictation ? "⏹ Stop" : "🎤 Dictate";
+  b.classList.toggle("listening", !!dictation); b.setAttribute("aria-pressed", String(!!dictation));
+}
+function toggleDictation() {
+  if (dictation) { dictation.stop(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new SR();
+  rec.lang = "en-AU"; rec.interimResults = true; rec.continuous = true;
+  const start = $("note-input").value;
+  const base = start && !/\s$/.test(start) ? start + " " : start;
+  let spoken = "";
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) spoken += r[0].transcript; else interim += r[0].transcript;
+    }
+    const ta = $("note-input");  // looked up each time: the panel may have redrawn
+    if (ta) ta.value = base + (spoken + interim).trimStart();
+  };
+  rec.onerror = e => toast(e.error === "not-allowed" || e.error === "service-not-allowed"
+    ? "Microphone access is blocked here. Use the 🎤 on your keyboard instead."
+    : e.error === "no-speech" ? "Didn't catch anything. Try again." : `Dictation stopped (${e.error}).`);
+  rec.onend = () => { dictation = null; setMic(); };
+  dictation = rec;
+  try { rec.start(); } catch { dictation = null; }
+  setMic();
+}
+
 function closeSheet() {
+  dictation?.stop();
   openId = null; prefsOpen = false; sheetKey = null;
   $("sheet").classList.remove("open"); $("scrim").classList.remove("open");
   history.replaceState(null, "", location.pathname + location.search);
@@ -726,7 +764,10 @@ function renderSheet(force = false) {
 
     <div class="section"><h3>Notes</h3><div class="panel">
       <textarea id="note-input" placeholder="Light, noise, storage, parking access, gut feel…">${esc(keepDraft)}</textarea>
-      <div class="btn-grid"><button class="btn primary" id="note-save">Add note</button></div>
+      <div class="btn-grid">${speechSupported()
+          ? `<button class="btn ${dictation ? "listening" : ""}" id="note-mic" aria-pressed="${!!dictation}">${dictation ? "⏹ Stop" : "🎤 Dictate"}</button>` : ""}
+        <button class="btn primary" id="note-save">Add note</button></div>
+      ${speechSupported() ? "" : `<div class="small muted" style="margin-top:8px">Tip: tap the 🎤 on your keyboard to dictate a note.</div>`}
       ${[...(c.notes || [])].reverse().map(n => `<div class="note"><div class="meta">${esc(fmtTime(n.at))}${n.by ? ` · ${esc(n.by)}` : ""}</div>${esc(n.text)}</div>`).join("")}
     </div></div>
 
@@ -788,7 +829,14 @@ document.addEventListener("click", e => {
     return;
   }
   if (t.id === "ics" && openId) { downloadIcs(openId); return; }
+  if (t.id === "note-mic") { toggleDictation(); return; }
   if (t.id === "note-save" && openId) {
+    if (dictation) {  // still listening: let the last words arrive, then save
+      const rec = dictation, done = rec.onend;
+      rec.onend = () => { done(); $("note-save")?.click(); };
+      rec.stop();
+      return;
+    }
     const text = $("note-input").value.trim(); if (!text) return;
     const id = openId; $("note-input").value = "";
     mutate(`Note: ${shortAddr(listings[id].address)}`, b => {
