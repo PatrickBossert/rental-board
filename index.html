@@ -444,6 +444,18 @@ function specsLine(l) {
   return bits.join(" · ");
 }
 
+// Where the listing's link goes, named by site; listings may come from Domain,
+// realestate.com.au or any agency website that was emailed in.
+function siteName(url) {
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { return "the website"; }
+  if (host.endsWith("domain.com.au")) return "Domain";
+  if (host.endsWith("realestate.com.au")) return "realestate.com.au";
+  return `agency website (${host})`;
+}
+// No usable link (e.g. an agency share button that only sent a generic page): search instead
+const searchUrl = l => "https://www.google.com/search?q=" + encodeURIComponent(`${l.address} for lease`);
+
 // where it came from (if not the Domain search) and criteria it misses (emailed-in listings)
 function originBadges(l) {
   const out = [];
@@ -488,7 +500,10 @@ function cardHtml(id) {
     } else if (agent.email) {
       actions = `<a href="${esc(mailLink(id))}" data-contact="${esc(id)}" data-method="email">✉️ Email agent</a>`;
     } else if (safeUrl(l.url)) {
-      actions = `<a href="${esc(l.url)}" target="_blank" rel="noopener">Contact via Domain →</a>`;
+      const short = siteName(l.url).replace(/^agency website \((.*)\)$/, "$1");  // keep phone buttons short
+      actions = `<a href="${esc(l.url)}" target="_blank" rel="noopener">Contact via ${esc(short)} →</a>`;
+    } else {
+      actions = `<a href="${esc(searchUrl(l))}" target="_blank" rel="noopener">🔎 Search for this listing</a>`;
     }
   }
   return `<article class="card" style="--c:${s.c}">
@@ -514,7 +529,7 @@ function messageText(id) {
   const chasing = (c.contacts || []).length > 0;
   return chasing
     ? `Hi ${firstName(a.name)}, just following up on ${shortAddr(l.address)}, ${l.suburb}. Is it still available, and could we book a viewing?${me}`
-    : `Hi ${firstName(a.name)}, we're interested in ${shortAddr(l.address)}, ${l.suburb} (${l.url || "listed on Domain"}). Is it still available, and could we arrange a viewing?${me}`;
+    : `Hi ${firstName(a.name)}, we're interested in ${shortAddr(l.address)}, ${l.suburb} ${l.url ? ` (${l.url})` : ""}. Is it still available, and could we arrange a viewing?${me}`;
 }
 const smsLink = id => `sms:${intl((listings[id].agent || {}).mobile || (listings[id].agent || {}).phone)}?&body=${encodeURIComponent(messageText(id))}`;
 const waLink = id => `https://wa.me/${intl(listings[id].agent.mobile).slice(1)}?text=${encodeURIComponent(messageText(id))}`;
@@ -604,7 +619,9 @@ function renderSheet(force = false) {
       <div class="specs">${esc(specsLine(l))}</div>
       ${originBadges(l).length ? `<div class="stage-line" style="margin-top:6px">${originBadges(l).join("")}</div>` : ""}
       ${l.pitch ? `<div class="small" style="margin-top:6px;font-style:italic">${esc(l.pitch)}</div>` : ""}
-      ${url ? `<div style="margin-top:8px"><a href="${esc(url)}" target="_blank" rel="noopener">Open on Domain →</a></div>` : ""}
+      <div style="margin-top:8px">${url
+        ? `<a href="${esc(url)}" target="_blank" rel="noopener">Open on ${esc(siteName(url))} →</a>`
+        : `<a href="${esc(searchUrl(l))}" target="_blank" rel="noopener">🔎 Search the web for this listing →</a>`}</div>
     </div>
 
     <div class="section"><h3>Stage</h3>
@@ -615,7 +632,8 @@ function renderSheet(force = false) {
     <div class="section"><h3>Agent</h3><div class="panel">
       ${a.name || l.agency ? `<div class="agent-name">${esc(a.name || "Agent")}</div><div class="muted small">${esc(l.agency || "")}</div>` : `<div class="muted">No agent details yet.</div>`}
       ${num || a.email ? `<div class="small muted" style="margin-top:4px">${esc([a.mobile, a.phone !== a.mobile && a.phone, a.email].filter(Boolean).join(" · "))}</div>` : ""}
-      ${contactBtns ? `<div class="btn-grid">${contactBtns}</div>` : url ? `<div class="btn-grid"><a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Contact via Domain</a></div>` : ""}
+      ${contactBtns ? `<div class="btn-grid">${contactBtns}</div>` : `<div class="btn-grid"><a class="btn" href="${esc(url || searchUrl(l))}" target="_blank" rel="noopener">${
+        url ? `Contact via ${esc(siteName(url))}` : "🔎 Find agent contact online"}</a></div>`}
       ${(c.contacts || []).length ? `<ul class="log">${[...c.contacts].reverse().map(x =>
         `<li><span class="when">${esc(fmtTime(x.at))}</span><span>${esc(verb(x.method))}${x.by ? ` · ${esc(x.by)}` : ""}</span></li>`).join("")}</ul>` : ""}
       ${needsChase(c) ? `<div class="badge warn" style="display:inline-block;margin-top:10px">No reply for ${Math.floor(hoursSince(lastContact(c).at) / 24)} days. Time to chase</div>` : ""}
