@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Rentals">
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#151513" media="(prefers-color-scheme: dark)">
+<title>Rental Board</title>
+<!--
+  Rental Board: kanban for the listings found by rental-hunter.
+  This page holds NO data. It reads and writes a private GitHub repo
+  (data/listings.json, data/board.json) with a token kept in this browser only.
+-->
+<style>
+:root {
+  --bg: #f6f5f2; --surface: #fff; --surface-2: #efede8; --ink: #1d1c1a; --muted: #6b6860;
+  --line: #e2dfd8; --accent: #0f6e56; --accent-ink: #fff; --accent-soft: #e1f2ec;
+  --warn: #9a5b00; --warn-soft: #fbefd9; --bad: #a1321f; --bad-soft: #f8e4df;
+  --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.06);
+  --s-new: #2f6fd6; --s-contacted: #b7791f; --s-viewing: #7b4fd0; --s-viewed: #0f7b8a;
+  --s-shortlist: #0f6e56; --s-rejected: #8a857b;
+  --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151513; --surface: #1f1e1b; --surface-2: #2a2925; --ink: #ecebe6; --muted: #a09d94;
+    --line: #34322d; --accent: #5fcfa9; --accent-ink: #0b1f19; --accent-soft: #173a30;
+    --warn: #f0b660; --warn-soft: #3a2c14; --bad: #f08a76; --bad-soft: #3b1d17;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+    --s-new: #7aa7ff; --s-contacted: #f0b660; --s-viewing: #b89bff; --s-viewed: #5cc8d6;
+    --s-shortlist: #5fcfa9; --s-rejected: #8f8a80;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); overscroll-behavior-y: none;
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); }
+.hidden { display: none !important; }
+
+/* ---------- top bar & stage tabs ---------- */
+.top { position: sticky; top: 0; z-index: 5; background: var(--bg);
+  padding: calc(var(--safe-t) + 10px) 16px 0; }
+.titlebar { display: flex; align-items: center; gap: 8px; }
+.titlebar h1 { font-size: 20px; margin: 0; flex: 1; letter-spacing: -.01em; }
+.sync { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.dot.busy { background: var(--warn); animation: pulse 1s infinite; }
+.dot.err { background: var(--bad); }
+@keyframes pulse { 50% { opacity: .3; } }
+.icon-btn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); display: grid; place-items: center; font-size: 17px; }
+.tabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 10px 0 10px;
+  margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px;
+  padding: 7px 12px; font-size: 13.5px; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.tab .n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+.tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.tab.on .n { color: inherit; opacity: .7; }
+.tab i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); font-style: normal; }
+
+/* ---------- board: swipeable columns on phones, side by side on desktop ---------- */
+.board { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory;
+  padding: 4px 16px calc(24px + var(--safe-b)); scrollbar-width: none; align-items: flex-start;
+  min-height: calc(100vh - 120px); }
+.board::-webkit-scrollbar { display: none; }
+.col { flex: 0 0 calc(100vw - 44px); max-width: 420px; scroll-snap-align: center; }
+@media (min-width: 900px) {
+  .board { scroll-snap-type: none; scrollbar-width: auto; }
+  .col { flex: 0 0 300px; scroll-snap-align: none; }
+}
+.col-head { display: flex; align-items: center; gap: 8px; margin: 2px 2px 10px; font-weight: 650; }
+.col-head i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.col-head .n { color: var(--muted); font-weight: 500; }
+.col-empty { border: 1.5px dashed var(--line); border-radius: 14px; padding: 22px 16px; text-align: center;
+  color: var(--muted); font-size: 13.5px; }
+.cards { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- card ---------- */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  overflow: hidden; border-left: 4px solid var(--c); }
+.card-main { display: flex; gap: 12px; width: 100%; text-align: left; background: none; border: 0; padding: 10px; }
+.thumb { flex: none; width: 84px; height: 84px; border-radius: 10px; background: var(--surface-2) center/cover no-repeat;
+  display: grid; place-items: center; font-size: 26px; color: var(--muted); }
+.info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.row1 { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.rent { font-weight: 700; font-size: 16.5px; }
+.sub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.addr { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.specs { color: var(--muted); font-size: 12.5px; }
+.stage-line { font-size: 12.5px; margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.badge { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }
+.badge.grey { background: var(--surface-2); color: var(--muted); }
+.card-actions { display: flex; border-top: 1px solid var(--line); }
+.card-actions a, .card-actions button { flex: 1; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  gap: 6px; text-decoration: none; color: var(--accent); font-weight: 600; font-size: 14px; background: none; border: 0; }
+.card-actions > * + * { border-left: 1px solid var(--line); }
+
+/* ---------- sheets (detail, settings) ---------- */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 20; opacity: 0; pointer-events: none;
+  transition: opacity .2s; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.sheet { position: fixed; z-index: 21; left: 0; right: 0; bottom: 0; max-height: 94vh; background: var(--bg);
+  border-radius: 18px 18px 0 0; transform: translateY(102%); transition: transform .25s ease;
+  display: flex; flex-direction: column; box-shadow: 0 -8px 30px rgba(0,0,0,.15); }
+.sheet.open { transform: none; }
+@media (min-width: 700px) {
+  .sheet { left: auto; right: 0; top: 0; bottom: 0; width: 460px; max-height: none; border-radius: 0;
+    transform: translateX(102%); }
+}
+.sheet-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px 16px; border-bottom: 1px solid var(--line); }
+.sheet-head h2 { flex: 1; margin: 0; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-body { overflow-y: auto; padding: 0 16px calc(28px + var(--safe-b)); -webkit-overflow-scrolling: touch; }
+.hero { margin: 14px 0 0; aspect-ratio: 16/9; border-radius: 14px; background: var(--surface-2) center/cover no-repeat; }
+.facts { margin: 12px 0 4px; }
+.facts .rent { font-size: 22px; }
+.section { margin-top: 18px; }
+.section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+.agent-name { font-weight: 650; }
+.btn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.btn { min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface);
+  display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; font-size: 14px;
+  text-decoration: none; color: var(--ink); padding: 0 12px; white-space: nowrap; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .45; }
+.log { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.log li { display: flex; gap: 8px; }
+.log .when { color: var(--muted); flex: none; min-width: 108px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+input[type=datetime-local], input[type=text], input[type=password], textarea, select {
+  font-size: 16px; /* 16px stops iOS zooming in on focus */
+  width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 11px 12px; }
+textarea { min-height: 88px; resize: vertical; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 7px 11px; font-size: 13px; }
+.stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.stages button { min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface);
+  font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.stages button i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.stages button.on { border-color: var(--c); box-shadow: inset 0 0 0 1.5px var(--c); }
+.note { border-top: 1px solid var(--line); padding: 10px 0 0; margin-top: 10px; font-size: 14px; white-space: pre-wrap; }
+.note .meta { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+.row { display: flex; gap: 8px; }
+.row > * { flex: 1; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+/* ---------- setup, toast ---------- */
+.setup { max-width: 480px; margin: 0 auto; padding: calc(var(--safe-t) + 32px) 20px 40px; }
+.setup h1 { font-size: 26px; margin: 0 0 6px; }
+.setup ol { padding-left: 20px; color: var(--muted); font-size: 14px; }
+.setup .field { margin-top: 14px; }
+.setup label { font-weight: 600; font-size: 14px; }
+.error { color: var(--bad); font-size: 14px; margin-top: 12px; }
+.toast { position: fixed; left: 16px; right: 16px; bottom: calc(18px + var(--safe-b)); margin: 0 auto; max-width: 440px;
+  transform: translateY(calc(100% + 40px)); background: var(--ink); color: var(--bg); padding: 8px 8px 8px 16px;
+  border-radius: 14px; z-index: 30; display: flex; gap: 12px; align-items: center; font-size: 14px; transition: transform .2s; }
+.toast.show { transform: none; }
+#toast-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast button { flex: none; background: none; border: 0; color: inherit; font-weight: 700; padding: 8px 10px;
+  text-decoration: underline; text-underline-offset: 3px; min-height: 40px; }
+.banner { margin: 0 16px 10px; padding: 10px 12px; border-radius: 12px; background: var(--bad-soft); color: var(--bad); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<!-- first-run setup -->
+<section id="setup" class="setup hidden">
+  <h1>Rental Board</h1>
+  <p class="muted">Connect this phone to your private <b>rental-hunter</b> repo. You only do this once per device.</p>
+  <ol>
+    <li>On github.com: <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+    <li>Repository access: <b>Only select repositories → rental-hunter</b>.</li>
+    <li>Permissions: <b>Contents → Read and write</b>. Generate, then copy it.</li>
+  </ol>
+  <div class="field"><label for="s-token">Access token</label>
+    <input id="s-token" type="password" autocomplete="off" placeholder="github_pat_…"></div>
+  <div class="field"><label for="s-repo">Repository</label>
+    <input id="s-repo" type="text" autocapitalize="off" autocorrect="off" value="PatrickBossert/rental-hunter"></div>
+  <div class="field"><label for="s-name">Your first name</label>
+    <input id="s-name" type="text" placeholder="Shown next to calls and notes"></div>
+  <div class="error hidden" id="s-error"></div>
+  <p><button class="btn primary" id="s-save" style="width:100%">Connect</button></p>
+  <p class="muted small">The token stays in this browser only. It can read and change the rental-hunter repo and nothing else.</p>
+</section>
+
+<!-- main app -->
+<div id="app" class="hidden">
+  <header class="top">
+    <div class="titlebar">
+      <h1>Rentals</h1>
+      <span class="sync"><span class="dot" id="dot"></span><span id="sync-text"></span></span>
+      <button class="icon-btn" id="refresh" aria-label="Refresh">↻</button>
+      <button class="icon-btn" id="settings" aria-label="Settings">⚙︎</button>
+    </div>
+    <nav class="tabs" id="tabs"></nav>
+  </header>
+  <div class="banner hidden" id="banner"></div>
+  <main class="board" id="board"></main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="sheet" id="sheet" role="dialog" aria-modal="true">
+  <div class="sheet-head"><h2 id="sheet-title"></h2>
+    <button class="icon-btn" id="sheet-close" aria-label="Close">✕</button></div>
+  <div class="sheet-body" id="sheet-body"></div>
+</aside>
+<div class="toast" id="toast"><span id="toast-text"></span><button id="toast-undo">Undo</button></div>
+
+<script>
+"use strict";
+// ============================================================ config & state
+const STAGES = [
+  { key: "new",       label: "New",            icon: "✨", c: "var(--s-new)" },
+  { key: "contacted", label: "Contacted",      icon: "📞", c: "var(--s-contacted)" },
+  { key: "viewing",   label: "Viewing booked", icon: "🗓", c: "var(--s-viewing)" },
+  { key: "viewed",    label: "Viewed",         icon: "👀", c: "var(--s-viewed)" },
+  { key: "shortlist", label: "Shortlist",      icon: "⭐", c: "var(--s-shortlist)" },
+  { key: "rejected",  label: "Rejected",       icon: "✖",  c: "var(--s-rejected)" },
+];
+const STAGE = Object.fromEntries(STAGES.map(s => [s.key, s]));
+const CHASE_AFTER_H = 48;
+const BOARD_PATH = "data/board.json", LISTINGS_PATH = "data/listings.json";
+
+const ls = {
+  get(k, d = null) { try { const v = localStorage.getItem("rb:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("rb:" + k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem("rb:" + k); } catch {} },
+};
+let cfg = { token: ls.get("token"), repo: ls.get("repo", "PatrickBossert/rental-hunter"), name: ls.get("name", "") };
+
+let listings = {};                          // id -> listing (from the hunter)
+let server = { board: { cards: {} }, sha: null };   // last state confirmed by GitHub
+let pending = [];                           // edits not yet saved: [{desc, fn}]
+let board = server.board;                   // what we render: server + pending
+let openId = null;
+
+// ============================================================ helpers
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safeUrl = u => (typeof u === "string" && /^https:\/\//.test(u)) ? u : null;
+const clone = o => JSON.parse(JSON.stringify(o));
+const nowIso = () => new Date().toISOString();
+const hoursSince = iso => (Date.now() - new Date(iso)) / 36e5;
+function ago(iso) {
+  const h = hoursSince(iso);
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))}m ago`;
+  if (h < 24) return `${Math.floor(h)}h ago`;
+  const d = Math.floor(h / 24); return d === 1 ? "yesterday" : `${d}d ago`;
+}
+const fmtWhen = v => new Date(v).toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+const fmtTime = v => new Date(v).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+function inDays(v) {
+  const d = Math.round((new Date(v).setHours(0,0,0,0) - new Date().setHours(0,0,0,0)) / 864e5);
+  return d === 0 ? "today" : d === 1 ? "tomorrow" : d > 1 ? `in ${d} days` : null;
+}
+const rentText = l => l.rent ? `$${Number(l.rent).toLocaleString()}/wk` : (l.display_price || "Price ?");
+const shortAddr = a => String(a || "").split(",")[0];
+
+// Australian numbers -> E.164 for tel:/sms:/wa.me
+function intl(num) {
+  if (!num) return null;
+  let d = String(num).replace(/[^\d+]/g, "");
+  if (d.startsWith("+")) return d;
+  if (d.startsWith("61")) return "+" + d;
+  if (d.startsWith("0")) return "+61" + d.slice(1);
+  return d;
+}
+const isMobile = n => /^\+614/.test(intl(n) || "");
+const firstName = n => String(n || "").trim().split(/\s+/)[0] || "there";
+
+function cardOf(id) { return board.cards[id] || { status: "new", contacts: [], notes: [] }; }
+
+// ============================================================ GitHub storage
+async function gh(path, opts = {}) {
+  const res = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`, {
+    cache: "no-store", ...opts,
+    headers: { Authorization: `Bearer ${cfg.token}`, "X-GitHub-Api-Version": "2022-11-28",
+               Accept: "application/vnd.github+json", ...(opts.headers || {}) },
+  });
+  return res;
+}
+const b64encode = s => { const bytes = new TextEncoder().encode(s); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b)); return btoa(bin); };
+const b64decode = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), c => c.charCodeAt(0)));
+
+async function fetchListings() {
+  const res = await gh(LISTINGS_PATH, { headers: { Accept: "application/vnd.github.raw+json" } });
+  if (res.status === 404) return {};
+  if (!res.ok) throw httpError(res);
+  return res.json();
+}
+async function fetchBoard() {
+  const res = await gh(BOARD_PATH);
+  if (res.status === 404) return { board: { cards: {} }, sha: null };
+  if (!res.ok) throw httpError(res);
+  const j = await res.json();
+  return { board: JSON.parse(b64decode(j.content)), sha: j.sha };
+}
+async function putBoard(next, sha, desc) {
+  const body = { message: `Board: ${desc}${cfg.name ? ` (${cfg.name})` : ""}`,
+                 content: b64encode(JSON.stringify(next, null, 1) + "\n") };
+  if (sha) body.sha = sha;
+  return gh(BOARD_PATH, { method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+}
+function httpError(res) {
+  const e = new Error(res.status === 401 ? "GitHub rejected the token. Check it in Settings."
+    : res.status === 403 ? "The token can't access that repo. It needs Contents: Read and write."
+    : res.status === 404 ? "Repo not found. Check the name in Settings, and that the token includes it."
+    : `GitHub error ${res.status}`);
+  e.status = res.status; return e;
+}
+
+// ============================================================ edits: optimistic, queued, conflict-safe
+// Every edit is a function applied to a board. If someone else saved first (sha
+// mismatch), we re-fetch their version and re-apply our function on top, so
+// two phones editing at once never overwrite each other.
+function rebuild() {
+  board = clone(server.board);
+  board.cards ||= {};
+  pending.forEach(p => p.fn(board));
+}
+function mutate(desc, fn, { undo = true } = {}) {
+  // Undo must only touch the cards THIS edit changed, never someone else's edits
+  // that arrive in between, so work out which cards fn touches up front.
+  const before = clone(board), probe = clone(board);
+  fn(probe);
+  const ids = [...new Set([...Object.keys(before.cards), ...Object.keys(probe.cards)])]
+    .filter(id => JSON.stringify(before.cards[id]) !== JSON.stringify(probe.cards[id]));
+  const snap = Object.fromEntries(ids.map(id => [id, before.cards[id]]));
+
+  pending.push({ desc, fn });
+  rebuild(); render();
+  if (undo) toast(desc, () => mutate(`Undo: ${desc}`, b => {
+    for (const id of ids) snap[id] ? (b.cards[id] = clone(snap[id])) : delete b.cards[id];
+  }, { undo: false }));
+  flush();
+}
+let flushing = false;
+async function flush() {
+  if (flushing) return; flushing = true; setSync("busy");
+  try {
+    while (pending.length) {
+      const p = pending[0];
+      let saved = false;
+      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
+        const next = clone(server.board); next.cards ||= {}; p.fn(next);
+        const res = await putBoard(next, server.sha, p.desc);
+        if (res.ok) { server = { board: next, sha: (await res.json()).content.sha }; saved = true; }
+        else if (res.status === 409 || res.status === 422) { server = await fetchBoard(); }
+        else throw httpError(res);
+      }
+      if (!saved) throw new Error("Couldn't save after several tries. Pull to refresh.");
+      pending.shift(); rebuild(); render();
+    }
+    setSync("ok");
+  } catch (e) { setSync("err", e.message); }
+  finally { flushing = false; }
+}
+
+async function load(quiet = false) {
+  if (!quiet) setSync("busy");
+  try {
+    const [l, b] = await Promise.all([fetchListings(), fetchBoard()]);
+    listings = l; server = b; rebuild(); render(); setSync("ok");
+    if (pending.length) flush();
+    return true;
+  } catch (e) { setSync("err", e.message); return false; }
+}
+
+let lastSynced = null;
+function setSync(state, msg) {
+  const dot = $("dot"); dot.className = "dot" + (state === "busy" ? " busy" : state === "err" ? " err" : "");
+  if (state === "ok") lastSynced = Date.now();
+  $("sync-text").textContent = state === "busy" ? "Saving…" : state === "err" ? "Offline" : "Synced";
+  $("banner").classList.toggle("hidden", state !== "err");
+  if (state === "err") $("banner").textContent = msg || "Couldn't reach GitHub.";
+}
+
+// ============================================================ card data
+function visibleIds() {
+  const ids = new Set(Object.keys(board.cards));
+  for (const [id, l] of Object.entries(listings)) if (l.status === "match") ids.add(id);
+  return [...ids].filter(id => listings[id]);
+}
+const lastContact = c => (c.contacts || []).at(-1);
+const needsChase = c => c.status === "contacted" && lastContact(c) && hoursSince(lastContact(c).at) > CHASE_AFTER_H;
+
+function sortFor(stage, ids) {
+  const key = {
+    new:       id => -new Date(listings[id].first_seen || 0),
+    contacted: id => new Date(lastContact(cardOf(id))?.at || 0),                 // longest-waiting first
+    viewing:   id => new Date(cardOf(id).viewing?.at || 8.64e15),               // soonest first
+  }[stage] || (id => -new Date(cardOf(id).updated || 0));
+  return ids.sort((a, b) => key(a) - key(b));
+}
+
+// ============================================================ render: board
+function render() {
+  const ids = visibleIds();
+  const byStage = Object.fromEntries(STAGES.map(s => [s.key, []]));
+  ids.forEach(id => (byStage[cardOf(id).status] || byStage.new).push(id));
+
+  $("tabs").innerHTML = STAGES.map((s, i) => `<button class="tab" data-col="${i}" style="--c:${s.c}">
+      <i></i>${esc(s.key === "viewing" ? "Viewing" : s.label)} <span class="n">${byStage[s.key].length}</span></button>`).join("");
+
+  $("board").innerHTML = STAGES.map(s => {
+    const list = sortFor(s.key, byStage[s.key]);
+    return `<section class="col" style="--c:${s.c}">
+      <div class="col-head"><i></i>${esc(s.label)} <span class="n">${list.length}</span></div>
+      ${list.length ? `<div class="cards">${list.map(cardHtml).join("")}</div>`
+        : `<div class="col-empty">${emptyText(s.key)}</div>`}
+    </section>`;
+  }).join("");
+  highlightTab();
+  if (openId) renderSheet();
+}
+const bgUrl = u => `background-image:url('${encodeURI(u).replace(/'/g, "%27")}')`;
+function emptyText(k) {
+  return { new: "No new listings. The hunter checks every hour.",
+           contacted: "Tap Call or Text on a new listing and it moves here.",
+           viewing: "Book a viewing from a contacted listing.",
+           viewed: "Viewings you've been to land here.",
+           shortlist: "Your favourites.", rejected: "Nothing rejected yet." }[k];
+}
+
+function specsLine(l) {
+  const bits = [`${l.bedrooms ?? "?"} bd`, `${l.bathrooms ?? "?"} ba`, `${l.carspaces ?? "?"} car`];
+  if (l.pool === "yes") bits.push("Pool"); else if (l.pool === "unclear") bits.push("Pool?");
+  if (l.outdoor_space && !["none", "unclear"].includes(l.outdoor_space))
+    bits.push(l.outdoor_space[0].toUpperCase() + l.outdoor_space.slice(1));
+  return bits.join(" · ");
+}
+
+function stageLine(id) {
+  const l = listings[id], c = cardOf(id), out = [];
+  if (!l.active) out.push(`<span class="badge grey">Off market</span>`);
+  if (c.status === "new") {
+    out.push(`<span class="muted">Found ${ago(l.first_seen)}</span>`);
+    const next = (l.inspections || []).find(t => new Date(t) > new Date());
+    if (next) out.push(`<span class="badge">Open ${esc(fmtWhen(next))}</span>`);
+  } else if (c.status === "contacted") {
+    const lc = lastContact(c);
+    if (lc) out.push(`<span class="muted">${esc(verb(lc.method))} ${ago(lc.at)}${lc.by ? ` · ${esc(lc.by)}` : ""}</span>`);
+    if (needsChase(c)) out.push(`<span class="badge warn">Chase</span>`);
+  } else if (c.status === "viewing" && c.viewing?.at) {
+    const past = new Date(c.viewing.at) < new Date();
+    out.push(past ? `<span class="badge warn">Viewed? Add notes</span>`
+                  : `<span class="badge">${esc(fmtWhen(c.viewing.at))}</span><span class="muted">${esc(inDays(c.viewing.at) || "")}</span>`);
+  } else {
+    const n = (c.notes || []).at(-1);
+    if (n) out.push(`<span class="muted">“${esc(n.text.slice(0, 60))}${n.text.length > 60 ? "…" : ""}”</span>`);
+  }
+  return out.join("");
+}
+
+function cardHtml(id) {
+  const l = listings[id], c = cardOf(id), s = STAGE[c.status] || STAGE.new;
+  const photo = safeUrl(l.photo);
+  const agent = l.agent || {};
+  const num = intl(agent.mobile || agent.phone);
+  let actions = "";
+  if (["new", "contacted"].includes(c.status)) {
+    if (num) {
+      actions = `<a href="tel:${esc(num)}" data-contact="${esc(id)}" data-method="call">📞 Call${agent.name ? " " + esc(firstName(agent.name)) : ""}</a>
+        <a href="${esc(smsLink(id))}" data-contact="${esc(id)}" data-method="sms">💬 Text</a>`;
+    } else if (agent.email) {
+      actions = `<a href="${esc(mailLink(id))}" data-contact="${esc(id)}" data-method="email">✉️ Email agent</a>`;
+    } else if (safeUrl(l.url)) {
+      actions = `<a href="${esc(l.url)}" target="_blank" rel="noopener">Contact via Domain →</a>`;
+    }
+  }
+  return `<article class="card" style="--c:${s.c}">
+    <button class="card-main" data-open="${esc(id)}">
+      <div class="thumb" style="${photo ? bgUrl(photo) : ""}">${photo ? "" : "🏠"}</div>
+      <div class="info">
+        <div class="row1"><span class="rent">${esc(rentText(l))}</span><span class="sub">${esc(l.suburb)}</span></div>
+        <div class="addr">${esc(shortAddr(l.address))}</div>
+        <div class="specs">${esc(specsLine(l))}</div>
+        <div class="stage-line">${stageLine(id)}</div>
+      </div>
+    </button>
+    ${actions ? `<div class="card-actions">${actions}</div>` : ""}
+  </article>`;
+}
+
+const verb = m => ({ call: "Called", sms: "Texted", email: "Emailed", whatsapp: "WhatsApp'd" }[m] || "Contacted");
+
+// ============================================================ contact links
+function messageText(id) {
+  const l = listings[id], c = cardOf(id), a = l.agent || {};
+  const me = cfg.name ? `\n\nThanks,\n${cfg.name}` : "\n\nThanks";
+  const chasing = (c.contacts || []).length > 0;
+  return chasing
+    ? `Hi ${firstName(a.name)}, just following up on ${shortAddr(l.address)}, ${l.suburb}. Is it still available, and could we book a viewing?${me}`
+    : `Hi ${firstName(a.name)}, we're interested in ${shortAddr(l.address)}, ${l.suburb} (${l.url || "listed on Domain"}). Is it still available, and could we arrange a viewing?${me}`;
+}
+const smsLink = id => `sms:${intl((listings[id].agent || {}).mobile || (listings[id].agent || {}).phone)}?&body=${encodeURIComponent(messageText(id))}`;
+const waLink = id => `https://wa.me/${intl(listings[id].agent.mobile).slice(1)}?text=${encodeURIComponent(messageText(id))}`;
+function mailLink(id) {
+  const l = listings[id];
+  return `mailto:${encodeURIComponent(l.agent.email)}?subject=${encodeURIComponent(`Rental enquiry: ${shortAddr(l.address)}, ${l.suburb}`)}&body=${encodeURIComponent(messageText(id))}`;
+}
+
+function logContact(id, method) {
+  mutate(`${verb(method)} agent: ${shortAddr(listings[id].address)}`, b => {
+    const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+    (c.contacts ||= []).push({ at: nowIso(), by: cfg.name || null, method });
+    if (c.status === "new") c.status = "contacted";
+    c.updated = nowIso();
+  });
+}
+
+// ============================================================ calendar
+const icsDate = d => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+function icsText(id) {
+  const l = listings[id], c = cardOf(id), a = l.agent || {};
+  const start = new Date(c.viewing.at), end = new Date(start.getTime() + 30 * 60000);
+  const escI = s => String(s || "").replace(/\\/g, "\\\\").replace(/[,;]/g, m => "\\" + m).replace(/\n/g, "\\n");
+  const desc = [rentText(l), a.name && `Agent: ${a.name}${l.agency ? ` (${l.agency})` : ""}`,
+                (a.mobile || a.phone) && `Phone: ${a.mobile || a.phone}`, l.url].filter(Boolean).join("\n");
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Rental Board//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    "BEGIN:VEVENT", `UID:viewing-${id}-${icsDate(start)}@rental-board`, `DTSTAMP:${icsDate(new Date())}`,
+    `DTSTART:${icsDate(start)}`, `DTEND:${icsDate(end)}`,
+    `SUMMARY:${escI("Viewing: " + shortAddr(l.address) + ", " + l.suburb)}`,
+    `LOCATION:${escI(l.address)}`, `DESCRIPTION:${escI(desc)}`, l.url ? `URL:${l.url}` : null,
+    "BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:Rental viewing", "TRIGGER:-PT1H", "END:VALARM",
+    "END:VEVENT", "END:VCALENDAR"].filter(Boolean).join("\r\n");
+}
+function downloadIcs(id) {
+  const a = document.createElement("a");
+  a.href = "data:text/calendar;charset=utf-8," + encodeURIComponent(icsText(id));
+  a.download = `viewing-${shortAddr(listings[id].address).replace(/[^\w]+/g, "-")}.ics`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function googleCalLink(id) {
+  const l = listings[id], c = cardOf(id), start = new Date(c.viewing.at), end = new Date(start.getTime() + 30 * 60000);
+  const p = new URLSearchParams({ action: "TEMPLATE", text: `Viewing: ${shortAddr(l.address)}, ${l.suburb}`,
+    dates: `${icsDate(start)}/${icsDate(end)}`, location: l.address || "", details: l.url || "" });
+  return `https://calendar.google.com/calendar/render?${p}`;
+}
+
+// ============================================================ detail sheet
+function openSheet(id) {
+  if (!listings[id]) return;
+  openId = id; renderSheet(true);
+  $("sheet").classList.add("open"); $("scrim").classList.add("open");
+  if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
+}
+function closeSheet() {
+  openId = null; $("sheet").classList.remove("open"); $("scrim").classList.remove("open");
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+let sheetKey = null;
+function renderSheet(force = false) {
+  const id = openId, l = listings[id]; if (!l) return closeSheet();
+  const c = cardOf(id), a = l.agent || {};
+  // only redraw when this listing changed, so a save elsewhere doesn't close the keyboard
+  const key = JSON.stringify([id, c, l, cfg.name]);
+  if (!force && key === sheetKey) return;
+  sheetKey = key;
+  const photo = safeUrl(l.photo), url = safeUrl(l.url);
+  const num = intl(a.mobile || a.phone);
+  const keepDraft = $("note-input")?.value || "";
+
+  $("sheet-title").textContent = shortAddr(l.address);
+  const contactBtns = [
+    num && `<a class="btn primary" href="tel:${esc(num)}" data-contact="${esc(id)}" data-method="call">📞 Call</a>`,
+    num && `<a class="btn" href="${esc(smsLink(id))}" data-contact="${esc(id)}" data-method="sms">💬 Text</a>`,
+    a.mobile && isMobile(a.mobile) && `<a class="btn" href="${esc(waLink(id))}" target="_blank" rel="noopener" data-contact="${esc(id)}" data-method="whatsapp">🟢 WhatsApp</a>`,
+    a.email && `<a class="btn" href="${esc(mailLink(id))}" data-contact="${esc(id)}" data-method="email">✉️ Email</a>`,
+  ].filter(Boolean).join("");
+
+  const upcoming = (l.inspections || []).filter(t => new Date(t) > new Date());
+  const viewingVal = c.viewing?.at ? c.viewing.at.slice(0, 16) : "";
+
+  $("sheet-body").innerHTML = `
+    ${photo ? `<div class="hero" style="${bgUrl(photo)}"></div>` : ""}
+    <div class="facts">
+      <div class="row1"><span class="rent">${esc(rentText(l))}</span>${l.active ? "" : `<span class="badge grey">Off market</span>`}</div>
+      <div class="addr" style="white-space:normal">${esc(l.address)}</div>
+      <div class="specs">${esc(specsLine(l))}</div>
+      ${l.pitch ? `<div class="small" style="margin-top:6px;font-style:italic">${esc(l.pitch)}</div>` : ""}
+      ${url ? `<div style="margin-top:8px"><a href="${esc(url)}" target="_blank" rel="noopener">Open on Domain →</a></div>` : ""}
+    </div>
+
+    <div class="section"><h3>Stage</h3>
+      <div class="stages">${STAGES.map(s => `<button data-stage="${s.key}" class="${c.status === s.key ? "on" : ""}" style="--c:${s.c}">
+        <i></i>${esc(s.key === "viewing" ? "Viewing" : s.label)}</button>`).join("")}</div>
+    </div>
+
+    <div class="section"><h3>Agent</h3><div class="panel">
+      ${a.name || l.agency ? `<div class="agent-name">${esc(a.name || "Agent")}</div><div class="muted small">${esc(l.agency || "")}</div>` : `<div class="muted">No agent details yet.</div>`}
+      ${num || a.email ? `<div class="small muted" style="margin-top:4px">${esc([a.mobile, a.phone !== a.mobile && a.phone, a.email].filter(Boolean).join(" · "))}</div>` : ""}
+      ${contactBtns ? `<div class="btn-grid">${contactBtns}</div>` : url ? `<div class="btn-grid"><a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Contact via Domain</a></div>` : ""}
+      ${(c.contacts || []).length ? `<ul class="log">${[...c.contacts].reverse().map(x =>
+        `<li><span class="when">${esc(fmtTime(x.at))}</span><span>${esc(verb(x.method))}${x.by ? ` · ${esc(x.by)}` : ""}</span></li>`).join("")}</ul>` : ""}
+      ${needsChase(c) ? `<div class="badge warn" style="display:inline-block;margin-top:10px">No reply for ${Math.floor(hoursSince(lastContact(c).at) / 24)} days. Time to chase</div>` : ""}
+      <div class="muted small" style="margin-top:8px">Tapping Call, Text, WhatsApp or Email logs the contact automatically.</div>
+    </div></div>
+
+    <div class="section"><h3>Viewing</h3><div class="panel">
+      ${upcoming.length ? `<div class="small muted" style="margin-bottom:6px">Open inspections</div>
+        <div class="chips" style="margin-bottom:10px">${upcoming.slice(0, 4).map(t =>
+          `<button class="chip" data-pick="${esc(t.slice(0, 16))}">${esc(fmtWhen(t))}</button>`).join("")}</div>` : ""}
+      <div class="field"><input type="datetime-local" id="viewing-input" value="${esc(viewingVal)}" step="300"></div>
+      <div class="btn-grid"><button class="btn primary" id="viewing-save">${c.viewing ? "Update viewing" : "Book viewing"}</button>
+        ${c.viewing ? `<button class="btn danger" id="viewing-clear">Cancel</button>` : ""}</div>
+      ${c.viewing?.at ? `<div class="small" style="margin-top:10px"><b>${esc(fmtWhen(c.viewing.at))}</b>
+          ${c.viewing.by ? `<span class="muted"> · booked by ${esc(c.viewing.by)}</span>` : ""}</div>
+        <div class="btn-grid"><button class="btn" id="ics">📅 Add to calendar</button>
+          <a class="btn" href="${esc(googleCalLink(id))}" target="_blank" rel="noopener">Google Calendar</a></div>
+        ${c.status === "viewing" && new Date(c.viewing.at) < new Date()
+          ? `<div class="btn-grid"><button class="btn primary" data-stage="viewed">👀 Mark as viewed</button></div>` : ""}` : ""}
+    </div></div>
+
+    <div class="section"><h3>Notes</h3><div class="panel">
+      <textarea id="note-input" placeholder="Light, noise, storage, parking access, gut feel…">${esc(keepDraft)}</textarea>
+      <div class="btn-grid"><button class="btn primary" id="note-save">Add note</button></div>
+      ${[...(c.notes || [])].reverse().map(n => `<div class="note"><div class="meta">${esc(fmtTime(n.at))}${n.by ? ` · ${esc(n.by)}` : ""}</div>${esc(n.text)}</div>`).join("")}
+    </div></div>
+
+    <div class="section row">
+      ${c.status !== "shortlist" ? `<button class="btn" data-stage="shortlist">⭐ Shortlist</button>` : ""}
+      ${c.status !== "rejected" ? `<button class="btn danger" data-stage="rejected">✖ Reject</button>` : ""}
+    </div>`;
+}
+
+function setStage(id, status) {
+  if (cardOf(id).status === status) return;
+  mutate(`${STAGE[status].label}: ${shortAddr(listings[id].address)}`, b => {
+    const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+    c.status = status; c.updated = nowIso();
+  });
+}
+
+// ============================================================ events
+document.addEventListener("click", e => {
+  const t = e.target;
+  const contact = t.closest("[data-contact]");
+  if (contact) {  // let the tel:/sms:/mailto: link open first; re-rendering now would detach it
+    const { contact: id, method } = contact.dataset;
+    setTimeout(() => logContact(id, method), 300);
+    return;
+  }
+  const open = t.closest("[data-open]");
+  if (open) { openSheet(open.dataset.open); return; }
+  const tab = t.closest("[data-col]");
+  if (tab) { const col = $("board").children[+tab.dataset.col];
+    col?.scrollIntoView({ behavior: "smooth", inline: window.innerWidth < 900 ? "center" : "start", block: "nearest" }); return; }
+  const stage = t.closest("[data-stage]");
+  if (stage && openId) { setStage(openId, stage.dataset.stage); return; }
+  const pick = t.closest("[data-pick]");
+  if (pick) { $("viewing-input").value = pick.dataset.pick; return; }
+  if (t.id === "viewing-save" && openId) {
+    const v = $("viewing-input").value;
+    if (!v) { $("viewing-input").focus(); return; }
+    const id = openId;
+    mutate(`Viewing booked: ${shortAddr(listings[id].address)}`, b => {
+      const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+      c.viewing = { at: v, by: cfg.name || null, set: nowIso() };
+      if (["new", "contacted"].includes(c.status)) c.status = "viewing";
+      c.updated = nowIso();
+    });
+    return;
+  }
+  if (t.id === "viewing-clear" && openId) {
+    const id = openId;
+    mutate(`Viewing cancelled: ${shortAddr(listings[id].address)}`, b => {
+      const c = b.cards[id]; if (!c) return;
+      delete c.viewing; if (c.status === "viewing") c.status = (c.contacts || []).length ? "contacted" : "new";
+      c.updated = nowIso();
+    });
+    return;
+  }
+  if (t.id === "ics" && openId) { downloadIcs(openId); return; }
+  if (t.id === "note-save" && openId) {
+    const text = $("note-input").value.trim(); if (!text) return;
+    const id = openId; $("note-input").value = "";
+    mutate(`Note: ${shortAddr(listings[id].address)}`, b => {
+      const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+      (c.notes ||= []).push({ at: nowIso(), by: cfg.name || null, text });
+      c.updated = nowIso();
+    });
+  }
+});
+$("sheet-close").onclick = closeSheet;
+$("scrim").onclick = closeSheet;
+document.addEventListener("keydown", e => { if (e.key === "Escape" && openId) closeSheet(); });
+$("refresh").onclick = () => load();
+$("settings").onclick = () => showSetup(true);
+document.addEventListener("visibilitychange", () => {   // came back to the app: pick up your spouse's changes
+  if (document.visibilityState === "visible" && cfg.token && Date.now() - (lastSynced || 0) > 20000) load(true);
+});
+window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (id && listings[id]) openSheet(id); });
+
+function highlightTab() {
+  const b = $("board"), cols = [...b.children];
+  const mid = b.scrollLeft + b.clientWidth / 2;
+  let idx = cols.findIndex(c => c.offsetLeft <= mid && c.offsetLeft + c.offsetWidth >= mid);
+  if (window.innerWidth >= 900) idx = -1;
+  [...$("tabs").children].forEach((t, i) => t.classList.toggle("on", i === idx));
+  const on = $("tabs").children[idx]; on?.scrollIntoView({ inline: "nearest", block: "nearest" });
+}
+let scrollTimer;
+$("board").addEventListener("scroll", () => { clearTimeout(scrollTimer); scrollTimer = setTimeout(highlightTab, 60); }, { passive: true });
+
+let toastTimer;
+function toast(text, onUndo) {
+  $("toast-text").textContent = text;
+  $("toast-undo").classList.toggle("hidden", !onUndo);
+  $("toast-undo").onclick = () => { $("toast").classList.remove("show"); onUndo && onUndo(); };
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4500);
+}
+
+// ============================================================ setup
+function showSetup(editing = false) {
+  $("setup").classList.remove("hidden"); $("app").classList.add("hidden");
+  $("s-token").value = editing && cfg.token ? cfg.token : "";
+  $("s-repo").value = cfg.repo; $("s-name").value = cfg.name || "";
+}
+$("s-save").onclick = async () => {
+  const token = $("s-token").value.trim(), repo = $("s-repo").value.trim().replace(/^https:\/\/github\.com\//, ""),
+        name = $("s-name").value.trim();
+  const err = $("s-error");
+  if (!token || !/^[\w.-]+\/[\w.-]+$/.test(repo)) { err.textContent = "Enter a token and a repo like owner/name."; err.classList.remove("hidden"); return; }
+  cfg = { token, repo, name };
+  $("s-save").disabled = true; $("s-save").textContent = "Connecting…";
+  const ok = await start();
+  $("s-save").disabled = false; $("s-save").textContent = "Connect";
+  if (!ok) { err.textContent = $("banner").textContent; err.classList.remove("hidden"); showSetup(true); return; }
+  ls.set("token", token); ls.set("repo", repo); ls.set("name", name); err.classList.add("hidden");
+};
+
+async function start() {
+  $("setup").classList.add("hidden"); $("app").classList.remove("hidden");
+  const ok = await load();
+  const id = location.hash.slice(1);
+  if (ok && id && listings[id]) openSheet(id);
+  return ok;
+}
+cfg.token ? start() : showSetup();
+</script>
+</body>
+</html>
