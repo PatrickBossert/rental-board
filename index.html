@@ -162,6 +162,7 @@ textarea { min-height: 88px; resize: vertical; }
 /* ---------- setup, toast ---------- */
 .setup { max-width: 480px; margin: 0 auto; padding: calc(var(--safe-t) + 32px) 20px 40px; }
 .setup h1 { font-size: 26px; margin: 0 0 6px; }
+.setup-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .setup ol { padding-left: 20px; color: var(--muted); font-size: 14px; }
 .setup .field { margin-top: 14px; }
 .setup label { font-weight: 600; font-size: 14px; }
@@ -192,7 +193,8 @@ textarea { min-height: 88px; resize: vertical; }
 
 <!-- first-run setup -->
 <section id="setup" class="setup hidden">
-  <h1>Rental Board</h1>
+  <div class="setup-head"><h1>Rental Board</h1>
+    <button class="icon-btn hidden" id="s-close" aria-label="Close settings">✕</button></div>
   <p class="muted">Connect this phone to your private <b>rental-hunter</b> repo. You only do this once per device.</p>
   <ol>
     <li>On github.com: <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
@@ -760,7 +762,11 @@ document.addEventListener("click", e => {
 });
 $("sheet-close").onclick = closeSheet;
 $("scrim").onclick = closeSheet;
-document.addEventListener("keydown", e => { if (e.key === "Escape" && (openId || prefsOpen)) closeSheet(); });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (openId || prefsOpen) closeSheet();
+  else if (!$("setup").classList.contains("hidden")) closeSetup();
+});
 $("refresh").onclick = () => load();
 $("prefs").onclick = openPrefs;
 $("settings").onclick = () => showSetup(true);
@@ -941,7 +947,19 @@ function showSetup(editing = false) {
   $("setup").classList.remove("hidden"); $("app").classList.add("hidden");
   $("s-token").value = editing && cfg.token ? cfg.token : "";
   $("s-repo").value = cfg.repo; $("s-name").value = cfg.name || "";
+  $("s-close").classList.toggle("hidden", !ls.get("token"));  // nothing to go back to on first setup
 }
+// Close without saving: back to the last settings that actually connected
+function closeSetup() {
+  if (!ls.get("token")) return;
+  const saved = { token: ls.get("token"), repo: ls.get("repo", cfg.repo), name: ls.get("name", "") };
+  const changed = saved.token !== cfg.token || saved.repo !== cfg.repo;  // e.g. a failed Connect attempt
+  cfg = saved;
+  $("s-error").classList.add("hidden");
+  $("setup").classList.add("hidden"); $("app").classList.remove("hidden");
+  if (changed) start();
+}
+$("s-close").onclick = closeSetup;
 $("s-save").onclick = async () => {
   const token = $("s-token").value.trim(), repo = $("s-repo").value.trim().replace(/^https:\/\/github\.com\//, ""),
         name = $("s-name").value.trim();
