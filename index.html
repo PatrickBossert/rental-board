@@ -196,6 +196,9 @@ textarea { min-height: 88px; resize: vertical; }
   <div class="setup-head"><h1>Rental Board</h1>
     <button class="icon-btn hidden" id="s-close" aria-label="Close settings">✕</button></div>
   <p class="muted">Connect this phone to your private <b>rental-hunter</b> repo. You only do this once per device.</p>
+  <p class="banner hidden" id="s-standalone" style="margin:12px 0;background:var(--accent-soft);color:var(--accent)">
+    You've opened the board from your home screen. iPhone keeps home-screen apps separate from Safari,
+    so connect once more here. After that it opens straight to your board.</p>
   <ol>
     <li>On github.com: <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
     <li>Repository access: <b>Only select repositories → rental-hunter</b>.</li>
@@ -948,6 +951,8 @@ function showSetup(editing = false) {
   $("s-token").value = editing && cfg.token ? cfg.token : "";
   $("s-repo").value = cfg.repo; $("s-name").value = cfg.name || "";
   $("s-close").classList.toggle("hidden", !ls.get("token"));  // nothing to go back to on first setup
+  const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches;
+  $("s-standalone").classList.toggle("hidden", !(standalone && !ls.get("token")));
 }
 // Close without saving: back to the last settings that actually connected
 function closeSetup() {
