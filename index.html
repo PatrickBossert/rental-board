@@ -678,8 +678,26 @@ function setMic() {
   b.textContent = dictation ? "⏹ Stop" : "🎤 Dictate";
   b.classList.toggle("listening", !!dictation); b.setAttribute("aria-pressed", String(!!dictation));
 }
+// iPhone doesn't always send the "end" event (e.g. after "Don't Allow" on the mic
+// prompt), so never let the button depend on it: errors reset at once, and a stop
+// resets after a short grace period for the last words to arrive.
+const STOP_GRACE_MS = 1200;
+function endDictation(rec) {
+  if (dictation !== rec) return false;
+  dictation = null; setMic();
+  return true;
+}
+function stopDictation(then) {
+  const rec = dictation; if (!rec) return then?.();
+  let finished = false;
+  const finish = () => { if (finished) return; finished = true; endDictation(rec); then?.(); };
+  rec.onend = finish;
+  try { rec.stop(); } catch { finish(); }
+  setTimeout(finish, STOP_GRACE_MS);  // no "end" event? finish anyway
+}
+
 function toggleDictation() {
-  if (dictation) { dictation.stop(); return; }
+  if (dictation) { stopDictation(); return; }
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const rec = new SR();
   rec.lang = "en-AU"; rec.interimResults = true; rec.continuous = true;
@@ -695,17 +713,22 @@ function toggleDictation() {
     const ta = $("note-input");  // looked up each time: the panel may have redrawn
     if (ta) ta.value = base + (spoken + interim).trimStart();
   };
-  rec.onerror = e => toast(e.error === "not-allowed" || e.error === "service-not-allowed"
-    ? "Microphone access is blocked here. Use the 🎤 on your keyboard instead."
-    : e.error === "no-speech" ? "Didn't catch anything. Try again." : `Dictation stopped (${e.error}).`);
-  rec.onend = () => { dictation = null; setMic(); };
+  rec.onerror = e => {
+    endDictation(rec);  // reset the button now; "end" may never come
+    try { rec.abort(); } catch {}
+    if (e.error === "aborted") return;
+    toast(e.error === "not-allowed" || e.error === "service-not-allowed"
+      ? "Microphone not allowed. Use the 🎤 on your keyboard, or allow the mic in Settings › Safari."
+      : e.error === "no-speech" ? "Didn't catch anything. Try again." : `Dictation stopped (${e.error}).`);
+  };
+  rec.onend = () => endDictation(rec);
   dictation = rec;
   try { rec.start(); } catch { dictation = null; }
   setMic();
 }
 
 function closeSheet() {
-  dictation?.stop();
+  stopDictation();
   openId = null; prefsOpen = false; sheetKey = null;
   $("sheet").classList.remove("open"); $("scrim").classList.remove("open");
   history.replaceState(null, "", location.pathname + location.search);
@@ -849,9 +872,7 @@ document.addEventListener("click", e => {
   if (t.id === "note-mic") { toggleDictation(); return; }
   if (t.id === "note-save" && openId) {
     if (dictation) {  // still listening: let the last words arrive, then save
-      const rec = dictation, done = rec.onend;
-      rec.onend = () => { done(); $("note-save")?.click(); };
-      rec.stop();
+      stopDictation(() => $("note-save")?.click());
       return;
     }
     const text = $("note-input").value.trim(); if (!text) return;
