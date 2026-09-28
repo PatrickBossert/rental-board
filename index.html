@@ -394,13 +394,47 @@ async function load(quiet = false) {
   if (!quiet) setSync("busy", "Updating…");
   try {
     const [l, b] = await Promise.all([fetchListings(), fetchBoard()]);
-    listings = l; server = b; rebuild(); render(); setSync("ok");
+    listings = l; server = b; rebuild(); render(); setSync("ok"); loadPhotos();
     ls.set(cacheKey(), { listings, board: server.board });  // instant board on the next open/refresh
     if (pending.length) flush();
     return true;
   } catch (e) { setSync("err", e.message); return false; }
 }
 const cacheKey = () => "cache:" + cfg.repo;
+
+// ============================================================ photos
+// Your personal agent saves a small copy of each listing's lead photo in the
+// private repo (data/photos/…). Fetch each one once with the token, keep it in
+// the browser's Cache Storage, and show it from there, instantly and offline.
+const photoUrls = {};          // repo path -> blob: URL
+const photoFor = l => photoUrls[l.photo_cached] || safeUrl(l.photo);
+let loadingPhotos = false;
+async function loadPhotos() {
+  if (loadingPhotos) return;
+  const paths = [...new Set(visibleIds().map(id => listings[id].photo_cached).filter(Boolean))]
+    .filter(p => !photoUrls[p] && /^data\/photos\/[\w-]+\.jpg$/.test(p));
+  if (!paths.length) return;
+  loadingPhotos = true;
+  let store = null;
+  try { store = await caches.open("rb-photos"); } catch {}  // unavailable in some private modes
+  const one = async p => {
+    const key = `https://photos.rental-board.invalid/${cfg.repo}/${p}`;
+    let blob = null;
+    try { const hit = await store?.match(key); if (hit) blob = await hit.blob(); } catch {}
+    if (!blob) {
+      const res = await gh(p, { headers: { Accept: "application/vnd.github.raw+json" } });
+      if (!res.ok) return;
+      blob = await res.blob();
+      try { await store?.put(key, new Response(blob, { headers: { "Content-Type": "image/jpeg" } })); } catch {}
+    }
+    photoUrls[p] = URL.createObjectURL(blob);
+  };
+  try {
+    for (let i = 0; i < paths.length; i += 6) await Promise.all(paths.slice(i, i + 6).map(p => one(p).catch(() => {})));
+  } finally { loadingPhotos = false; }
+  render();
+  if (openId) renderSheet(true);
+}
 
 let lastSynced = null;
 function setSync(state, msg) {
@@ -520,7 +554,7 @@ function stageLine(id) {
 
 function cardHtml(id) {
   const l = listings[id], c = cardOf(id), s = STAGE[c.status] || STAGE.new;
-  const photo = safeUrl(l.photo);
+  const photo = photoFor(l);
   const agent = l.agent || {};
   const num = intl(agent.mobile || agent.phone);
   let actions = "";
@@ -630,7 +664,7 @@ function renderSheet(force = false) {
   const key = JSON.stringify([id, c, l, cfg.name]);
   if (!force && key === sheetKey) return;
   sheetKey = key;
-  const photo = safeUrl(l.photo), url = safeUrl(l.url);
+  const photo = photoFor(l), url = safeUrl(l.url);
   const num = intl(a.mobile || a.phone);
   const keepDraft = $("note-input")?.value || "";
 
@@ -984,7 +1018,7 @@ async function start() {
   const cached = ls.get(cacheKey());
   if (cached?.listings && cached?.board) {  // show the last board immediately, then refresh it
     listings = cached.listings; server = { board: cached.board, sha: null };
-    rebuild(); render(); restoreView();
+    rebuild(); render(); restoreView(); loadPhotos();
     if (id && listings[id]) openSheet(id);
   }
   const ok = await load();
