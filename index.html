@@ -302,7 +302,24 @@ function intl(num) {
 const isMobile = n => /^\+614/.test(intl(n) || "");
 const firstName = n => String(n || "").trim().split(/\s+/)[0] || "there";
 
-function cardOf(id) { return board.cards[id] || { status: "new", contacts: [], notes: [] }; }
+// Emailed in again after being rejected/deleted means you're interested again, so it
+// shows in New until you act on it. Each re-send has its own `readded_at` stamp; a card
+// records the stamp it has "seen" (ack_readded), so this never depends on clocks.
+const resent = (c, id) => {
+  const r = listings[id]?.readded_at;
+  return r && c.ack_readded !== r && ["rejected", "deleted"].includes(c.status);
+};
+function cardOf(id) {
+  const c = board.cards[id] || { status: "new", contacts: [], notes: [] };
+  return resent(c, id) ? { ...c, status: "new" } : c;
+}
+// Every edit goes through here: the card you're editing is the one you see.
+function touch(b, id) {
+  const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+  if (resent(c, id)) c.status = "new";
+  if (listings[id]?.readded_at) c.ack_readded = listings[id].readded_at;
+  return c;
+}
 
 // ============================================================ GitHub storage
 async function gh(path, opts = {}) {
@@ -457,7 +474,7 @@ function visibleIds() {
 function deleteCard(id) {
   if (openId === id) closeSheet();
   mutate(`Deleted: ${shortAddr(listings[id].address)}`, b => {
-    const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+    const c = touch(b, id);
     c.deleted_from = c.status; c.status = "deleted"; c.updated = nowIso();
   });
 }
@@ -608,7 +625,7 @@ function mailLink(id) {
 
 function logContact(id, method) {
   mutate(`${verb(method)} agent: ${shortAddr(listings[id].address)}`, b => {
-    const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+    const c = touch(b, id);
     (c.contacts ||= []).push({ at: nowIso(), by: cfg.name || null, method });
     if (c.status === "new") c.status = "contacted";
     c.updated = nowIso();
@@ -781,7 +798,7 @@ function renderSheet(force = false) {
 function setStage(id, status) {
   if (cardOf(id).status === status) return;
   mutate(`${STAGE[status].label}: ${shortAddr(listings[id].address)}`, b => {
-    const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+    const c = touch(b, id);
     c.status = status; c.updated = nowIso();
   });
 }
@@ -812,7 +829,7 @@ document.addEventListener("click", e => {
     if (!v) { $("viewing-input").focus(); return; }
     const id = openId;
     mutate(`Viewing booked: ${shortAddr(listings[id].address)}`, b => {
-      const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+      const c = touch(b, id);
       c.viewing = { at: v, by: cfg.name || null, set: nowIso() };
       if (["new", "contacted"].includes(c.status)) c.status = "viewing";
       c.updated = nowIso();
@@ -840,7 +857,7 @@ document.addEventListener("click", e => {
     const text = $("note-input").value.trim(); if (!text) return;
     const id = openId; $("note-input").value = "";
     mutate(`Note: ${shortAddr(listings[id].address)}`, b => {
-      const c = b.cards[id] ||= { status: "new", contacts: [], notes: [] };
+      const c = touch(b, id);
       (c.notes ||= []).push({ at: nowIso(), by: cfg.name || null, text });
       c.updated = nowIso();
     });
