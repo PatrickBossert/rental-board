@@ -80,6 +80,10 @@ a { color: var(--accent); }
 .col-head { display: flex; align-items: center; gap: 8px; margin: 2px 2px 10px; font-weight: 650; }
 .col-head i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
 .col-head .n { color: var(--muted); font-weight: 500; }
+.check-now { margin-left: auto; border: 1px solid var(--line); background: var(--surface); border-radius: 999px;
+  padding: 6px 12px; min-height: 36px; font-size: 13px; font-weight: 600; color: var(--accent);
+  display: flex; align-items: center; gap: 6px; }
+.check-now:disabled { color: var(--muted); }
 .col-empty { border: 1.5px dashed var(--line); border-radius: 14px; padding: 22px 16px; text-align: center;
   color: var(--muted); font-size: 13.5px; }
 .cards { display: flex; flex-direction: column; gap: 10px; }
@@ -330,6 +334,52 @@ async function gh(path, opts = {}) {
   });
   return res;
 }
+// ============================================================ "Check now": run your personal agent on demand
+// Starts the Hunt workflow (needs the token's Actions: Read and write permission),
+// follows the run, then reloads the board.
+const WORKFLOW = "hunt.yml";
+let checking = "";   // progress label while a check runs ("" = idle)
+function ghApi(path, opts = {}) {
+  return fetch(`https://api.github.com/repos/${cfg.repo}/${path}`, {
+    cache: "no-store", ...opts,
+    headers: { Authorization: `Bearer ${cfg.token}`, "X-GitHub-Api-Version": "2022-11-28",
+               Accept: "application/vnd.github+json", ...(opts.headers || {}) },
+  });
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function checkNow() {
+  if (checking) return;
+  const setChecking = label => { checking = label; render(); };
+  const before = new Set(visibleIds().filter(id => cardOf(id).status === "new"));
+  const startedAt = Date.now();
+  setChecking("Starting…");
+  try {
+    const res = await ghApi(`actions/workflows/${WORKFLOW}/dispatches`, {
+      method: "POST", body: JSON.stringify({ ref: "main" }), headers: { "Content-Type": "application/json" } });
+    if (res.status === 403 || res.status === 404)
+      throw new Error("Your GitHub token can't start runs yet. Add Actions: Read and write to it on github.com.");
+    if (!res.ok) throw httpError(res);
+
+    // find the run we just started, then follow it (a check usually takes about a minute)
+    let run = null;
+    for (let i = 0; i < 90 && (!run || run.status !== "completed"); i++) {
+      await sleep(i < 3 ? 3000 : 4000);
+      const r = await ghApi(`actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=3`);
+      if (!r.ok) continue;
+      run = (await r.json()).workflow_runs.find(w => new Date(w.created_at) >= startedAt - 60_000) || run;
+      setChecking(!run ? "Starting…" : run.status === "queued" ? "Queued…" : run.status === "completed" ? "Loading…" : "Checking…");
+    }
+    if (!run || run.status !== "completed") throw new Error("Still running. The board will update when it finishes.");
+    if (run.conclusion !== "success") throw new Error("The check hit a problem. Details are in the Actions tab on GitHub.");
+    await sleep(1500);  // let GitHub serve the freshly committed data
+    await load(true);
+    const added = visibleIds().filter(id => cardOf(id).status === "new" && !before.has(id)).length;
+    toast(added ? `Check complete: ${added} new listing${added > 1 ? "s" : ""}.` : "Check complete: nothing new.");
+  } catch (e) {
+    toast(e.message);
+  } finally { setChecking(""); }
+}
+
 const b64encode = s => { const bytes = new TextEncoder().encode(s); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b)); return btoa(bin); };
 const b64decode = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), c => c.charCodeAt(0)));
 
@@ -502,7 +552,9 @@ function render() {
   $("board").innerHTML = STAGES.map(s => {
     const list = sortFor(s.key, byStage[s.key]);
     return `<section class="col" style="--c:${s.c}">
-      <div class="col-head"><i></i>${esc(s.label)} <span class="n">${list.length}</span></div>
+      <div class="col-head"><i></i>${esc(s.label)} <span class="n">${list.length}</span>
+        ${s.key === "new" ? `<button class="check-now" id="check-now" ${checking ? "disabled" : ""}>${
+          checking ? `<span class="dot busy"></span> ${esc(checking)}` : "🔄 Check now"}</button>` : ""}</div>
       ${list.length ? `<div class="cards">${list.map(cardHtml).join("")}</div>`
         : `<div class="col-empty">${emptyText(s.key)}</div>`}
     </section>`;
@@ -870,6 +922,7 @@ document.addEventListener("click", e => {
   }
   if (t.id === "ics" && openId) { downloadIcs(openId); return; }
   if (t.id === "note-mic") { toggleDictation(); return; }
+  if (t.closest("#check-now")) { checkNow(); return; }
   if (t.id === "note-save" && openId) {
     if (dictation) {  // still listening: let the last words arrive, then save
       stopDictation(() => $("note-save")?.click());
