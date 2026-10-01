@@ -595,6 +595,8 @@ const searchUrl = l => "https://www.google.com/search?q=" + encodeURIComponent(`
 function originBadges(l) {
   const out = [];
   if (l.source && l.source !== "domain") out.push(`<span class="badge grey">${l.source === "email" ? "Emailed in" : "via " + esc(l.source)}</span>`);
+  // details found by web search may come from an older listing of the same unit: check before relying on them
+  if (l.details_source === "web search") out.push(`<span class="badge grey" title="Found by web search; check the listing">Details from web search</span>`);
   (l.flags || []).forEach(f => out.push(`<span class="badge warn">⚠ ${esc(f)}</span>`));
   return out;
 }
