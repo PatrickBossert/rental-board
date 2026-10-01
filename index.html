@@ -932,7 +932,10 @@ function saveViewing(id, v) {
   });
   return true;
 }
-document.addEventListener("change", e => {
+// Save when the picker closes (the ✓ / Done, or leaving the field), not on every
+// "change": iPhone fires change on each spin of the wheels, which saved a string of
+// in-between times while scrolling to the one you wanted.
+document.addEventListener("focusout", e => {
   if (e.target.id === "viewing-input" && openId) saveViewing(openId, e.target.value);
 });
 
