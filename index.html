@@ -741,6 +741,22 @@ function logContact(id, method) {
 
 // ============================================================ calendar
 const icsDate = d => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+// iPhone only opens a pre-filled Calendar event from a real web address serving a
+// text/calendar file (it blocks files a page builds itself), so Add to calendar links
+// to a tiny Cloudflare Worker that builds the file from the link (calendar-worker/ in
+// the rental-hunter repo). Empty = fall back to the in-page file (fine on desktop).
+const CALENDAR_SERVICE = "";
+function calendarLink(id) {
+  const l = listings[id], c = cardOf(id), a = l.agent || {};
+  const start = new Date(c.viewing.at), end = new Date(start.getTime() + 30 * 60000);
+  const details = [rentText(l), a.name && `Agent: ${a.name}${l.agency ? ` (${l.agency})` : ""}`,
+                   (a.mobile || a.phone) && `Phone: ${a.mobile || a.phone}`, l.url].filter(Boolean).join("\n");
+  const q = new URLSearchParams({ title: `Viewing: ${shortAddr(l.address)}, ${l.suburb}`, start: icsDate(start), end: icsDate(end),
+    location: l.address || "", details, uid: `viewing-${id}-${icsDate(start)}@rental-board` });
+  if (safeUrl(l.url)) q.set("url", l.url);
+  return `${CALENDAR_SERVICE.replace(/\/$/, "")}/viewing.ics?${q}`;
+}
 function icsText(id) {
   const l = listings[id], c = cardOf(id), a = l.agent || {};
   const start = new Date(c.viewing.at), end = new Date(start.getTime() + 30 * 60000);
@@ -906,7 +922,9 @@ function renderSheet(force = false) {
       ${viewingFields(viewingVal, !!c.viewing)}
       ${c.viewing?.at ? `<div class="small" style="margin-top:10px"><b>${esc(fmtWhen(c.viewing.at))}</b>
           ${c.viewing.by ? `<span class="muted"> · added by ${esc(c.viewing.by)}</span>` : ""}</div>
-        <div class="btn-grid"><button class="btn" id="ics">📅 Add to calendar</button>
+        <div class="btn-grid">${CALENDAR_SERVICE
+          ? `<a class="btn" href="${esc(calendarLink(id))}" target="_blank" rel="noopener">📅 Add to calendar</a>`
+          : `<button class="btn" id="ics">📅 Add to calendar</button>`}
           <a class="btn" href="${esc(googleCalLink(id))}" target="_blank" rel="noopener">Google Calendar</a></div>
         ${c.status === "viewing" && new Date(c.viewing.at) < new Date()
           ? `<div class="btn-grid"><button class="btn primary" data-stage="viewed">👀 Mark as viewed</button></div>` : ""}` : ""}
