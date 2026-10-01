@@ -146,6 +146,11 @@ a { color: var(--accent); }
 .log li { display: flex; gap: 8px; }
 .log .when { color: var(--muted); flex: none; min-width: 108px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
+/* iPhone gives date inputs an intrinsic min-width wider than a phone panel; reset it */
+input[type=datetime-local] { -webkit-appearance: none; appearance: none; display: block; min-width: 0;
+  max-width: 100%; min-height: 46px; text-align: left; }
+input[type=datetime-local]::-webkit-date-and-time-value { text-align: left; }
+.field { min-width: 0; }
 input[type=datetime-local], input[type=text], input[type=password], textarea, select {
   font-size: 16px; /* 16px stops iOS zooming in on focus */
   width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 11px 12px; }
@@ -844,9 +849,9 @@ function renderSheet(force = false) {
       ${upcoming.length ? `<div class="small muted" style="margin-bottom:6px">Open inspections</div>
         <div class="chips" style="margin-bottom:10px">${upcoming.slice(0, 4).map(t =>
           `<button class="chip" data-pick="${esc(t.slice(0, 16))}">${esc(fmtWhen(t))}</button>`).join("")}</div>` : ""}
-      <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the time and record it here.</div>
+      <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the time and it's saved straight away.</div>
       <div class="field"><input type="datetime-local" id="viewing-input" value="${esc(viewingVal)}" step="300"></div>
-      <div class="btn-grid"><button class="btn primary" id="viewing-save">${c.viewing ? "Update viewing time" : "Viewing booked"}</button>
+      <div class="btn-grid"><button class="btn" id="viewing-save">Save viewing time</button>
         ${c.viewing ? `<button class="btn danger" id="viewing-clear">Remove</button>` : ""}</div>
       ${c.viewing?.at ? `<div class="small" style="margin-top:10px"><b>${esc(fmtWhen(c.viewing.at))}</b>
           ${c.viewing.by ? `<span class="muted"> · added by ${esc(c.viewing.by)}</span>` : ""}</div>
@@ -872,9 +877,29 @@ function renderSheet(force = false) {
     </div>`;
 }
 
+// Save the viewing time (and move the card to Viewing booked). Called as soon as the
+// time is picked, from the Save button, and from the Viewing stage button, so a
+// picked time can't be left behind unsaved.
+function saveViewing(id, v) {
+  if (!v) return false;
+  if (cardOf(id).viewing?.at === v) return true;
+  mutate(`Viewing time ${fmtWhen(v)}: ${shortAddr(listings[id].address)}`, b => {
+    const c = touch(b, id);
+    c.viewing = { at: v, by: cfg.name || null, set: nowIso() };
+    if (["new", "contacted"].includes(c.status)) c.status = "viewing";
+    c.updated = nowIso();
+  });
+  return true;
+}
+document.addEventListener("change", e => {
+  if (e.target.id === "viewing-input" && openId) saveViewing(openId, e.target.value);
+});
+
 function setStage(id, status) {
+  const picked = openId === id ? $("viewing-input")?.value : "";
+  if (status === "viewing" && picked && !cardOf(id).viewing) { saveViewing(id, picked); return; }
   if (cardOf(id).status === status) return;
-  mutate(`${STAGE[status].label}: ${shortAddr(listings[id].address)}`, b => {
+  mutate(`Moved to ${STAGE[status].label}: ${shortAddr(listings[id].address)}`, b => {
     const c = touch(b, id);
     c.status = status; c.updated = nowIso();
   });
@@ -903,14 +928,9 @@ document.addEventListener("click", e => {
   if (pick) { $("viewing-input").value = pick.dataset.pick; return; }
   if (t.id === "viewing-save" && openId) {
     const v = $("viewing-input").value;
-    if (!v) { $("viewing-input").focus(); return; }
-    const id = openId;
-    mutate(`Viewing booked: ${shortAddr(listings[id].address)}`, b => {
-      const c = touch(b, id);
-      c.viewing = { at: v, by: cfg.name || null, set: nowIso() };
-      if (["new", "contacted"].includes(c.status)) c.status = "viewing";
-      c.updated = nowIso();
-    });
+    if (!v) { $("viewing-input").focus(); toast("Pick a date and time first."); return; }
+    if (cardOf(openId).viewing?.at === v) toast("That viewing time is already saved.");
+    else saveViewing(openId, v);
     return;
   }
   if (t.id === "viewing-clear" && openId) {
