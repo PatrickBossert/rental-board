@@ -1,0 +1,16 @@
+// Cloudflare Worker for https://rentalhunter.app (deploy: npx wrangler deploy)
+{
+  "name": "rentalhunter",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./",          // index.html at the repo root (also what GitHub Pages serves)
+    "binding": "ASSETS",
+    "run_worker_first": true    // so the Worker adds headers, handles /viewing.ics and www
+  },
+  "routes": [
+    { "pattern": "rentalhunter.app", "custom_domain": true },
+    { "pattern": "www.rentalhunter.app", "custom_domain": true }
+  ],
+  "observability": { "enabled": false }   // no request logs: calendar links contain addresses
+}

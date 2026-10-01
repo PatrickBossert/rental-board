@@ -11,3 +11,11 @@ The columns are New → Contacted → Viewing booked → Viewed → Shortlist / 
 - **Notes** record who wrote them and when. If both of you edit at once, both edits are kept. Undo only reverses your own change.
 
 On iPhone, add it to your home screen: Safari → Share → **Add to Home Screen**.
+
+## Hosting
+
+Served at **https://rentalhunter.app** by a Cloudflare Worker (`worker/`, `wrangler.jsonc`):
+the Worker serves `index.html`, adds security headers, redirects `www`, and answers
+`/viewing.ics` (calendar files for **Add to calendar**; iPhone only opens those from a real
+web address). It stores nothing. Deploy after changing the board: `npx wrangler deploy`.
+The old GitHub Pages address still works and shows a "moved" notice.

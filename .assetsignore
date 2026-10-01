@@ -1,0 +1,8 @@
+# only index.html is served as a page; keep the Worker's own files out of the site
+.git
+.wrangler
+node_modules
+worker
+wrangler.jsonc
+README.md
+.gitignore
