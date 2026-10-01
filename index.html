@@ -95,6 +95,12 @@ a { color: var(--accent); }
 .thumb { flex: none; width: 84px; height: 84px; border-radius: 10px; background: var(--surface-2) center/cover no-repeat;
   display: grid; place-items: center; font-size: 26px; color: var(--muted); }
 .info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.thumb-col { flex: none; width: 84px; display: flex; flex-direction: column; gap: 6px; }
+.when { border-radius: 8px; background: color-mix(in srgb, var(--s-viewing) 16%, transparent); color: var(--s-viewing);
+  text-align: center; padding: 4px 2px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.when b { display: block; font-size: 12.5px; }
+.when span { font-size: 12px; font-weight: 600; }
+.when.past { background: var(--warn-soft); color: var(--warn); }
 .row1 { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .rent { font-weight: 700; font-size: 16.5px; }
 .sub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -620,13 +626,24 @@ function stageLine(id) {
     if (needsChase(c)) out.push(`<span class="badge warn">Chase</span>`);
   } else if (c.status === "viewing" && c.viewing?.at) {
     const past = new Date(c.viewing.at) < new Date();
+    // the day and time sit under the photo (viewingStamp); here just how soon
     out.push(past ? `<span class="badge warn">Viewed? Add notes</span>`
-                  : `<span class="badge">${esc(fmtWhen(c.viewing.at))}</span><span class="muted">${esc(inDays(c.viewing.at) || "")}</span>`);
+                  : `<span class="muted">Viewing ${esc(inDays(c.viewing.at) || "")}</span>`);
   } else {
     const n = (c.notes || []).at(-1);
     if (n) out.push(`<span class="muted">“${esc(n.text.slice(0, 60))}${n.text.length > 60 ? "…" : ""}”</span>`);
   }
   return out.join("");
+}
+
+// Viewing day and time, shown under the card's photo while it's in Viewing booked
+function viewingStamp(c) {
+  if (c.status !== "viewing" || !c.viewing?.at) return "";
+  const d = new Date(c.viewing.at);
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const day = `${d.toLocaleDateString("en-AU", { weekday: "short" })} ${d.getDate()} ${MON[d.getMonth()]}`;  // fits under the photo
+  const time = d.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" });
+  return `<div class="when ${d < new Date() ? "past" : ""}"><b>${esc(day)}</b><span>${esc(time)}</span></div>`;
 }
 
 function cardHtml(id) {
@@ -652,7 +669,8 @@ function cardHtml(id) {
   }
   return `<article class="card" style="--c:${s.c}">
     <button class="card-main" data-open="${esc(id)}">
-      <div class="thumb" style="${photo ? bgUrl(photo) : ""}">${photo ? "" : "🏠"}</div>
+      <div class="thumb-col"><div class="thumb" style="${photo ? bgUrl(photo) : ""}">${photo ? "" : "🏠"}</div>
+        ${viewingStamp(c)}</div>
       <div class="info">
         <div class="row1"><span class="rent">${esc(rentText(l))}</span><span class="sub">${esc(l.suburb)}</span></div>
         <div class="addr">${esc(shortAddr(l.address))}</div>
