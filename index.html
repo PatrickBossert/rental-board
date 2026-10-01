@@ -829,6 +829,8 @@ function toggleDictation() {
 
 function closeSheet() {
   stopDictation();
+  if (openId && viewingDraft.id === openId) saveViewing(openId, viewingDraft.value);  // don't lose a picked time
+  viewingDraft = { id: null, value: "" };
   openId = null; prefsOpen = false; sheetKey = null;
   $("sheet").classList.remove("open"); $("scrim").classList.remove("open");
   history.replaceState(null, "", location.pathname + location.search);
@@ -855,7 +857,8 @@ function renderSheet(force = false) {
   ].filter(Boolean).join("");
 
   const upcoming = (l.inspections || []).filter(t => new Date(t) > new Date());
-  const viewingVal = c.viewing?.at ? c.viewing.at.slice(0, 16) : "";
+  const savedVal = c.viewing?.at ? c.viewing.at.slice(0, 16) : "";
+  const viewingVal = viewingDraft.id === id ? viewingDraft.value : savedVal;  // keep an unsaved pick across redraws
 
   $("sheet-body").innerHTML = `
     ${photo ? `<div class="hero" style="${bgUrl(photo)}"></div>` : ""}
@@ -890,9 +893,10 @@ function renderSheet(force = false) {
       ${upcoming.length ? `<div class="small muted" style="margin-bottom:6px">Open inspections</div>
         <div class="chips" style="margin-bottom:10px">${upcoming.slice(0, 4).map(t =>
           `<button class="chip" data-pick="${esc(t.slice(0, 16))}">${esc(fmtWhen(t))}</button>`).join("")}</div>` : ""}
-      <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the time and it's saved straight away.</div>
-      <div class="field"><input type="datetime-local" id="viewing-input" value="${esc(viewingVal)}" step="300"></div>
-      <div class="btn-grid"><button class="btn" id="viewing-save">Save viewing time</button>
+      <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the time, then tap Save viewing time.</div>
+      <div class="small ${viewingVal && viewingVal !== savedVal ? "" : "hidden"}" id="viewing-unsaved" style="color:var(--warn);margin-bottom:6px">Not saved yet: tap Save viewing time.</div>
+      <div class="field"><input type="datetime-local" id="viewing-input" value="${esc(viewingVal)}"></div>
+      <div class="btn-grid"><button class="btn ${viewingVal && viewingVal !== savedVal ? "primary" : ""}" id="viewing-save">Save viewing time</button>
         ${c.viewing ? `<button class="btn danger" id="viewing-clear">Remove</button>` : ""}</div>
       ${c.viewing?.at ? `<div class="small" style="margin-top:10px"><b>${esc(fmtWhen(c.viewing.at))}</b>
           ${c.viewing.by ? `<span class="muted"> · added by ${esc(c.viewing.by)}</span>` : ""}</div>
@@ -923,6 +927,7 @@ function renderSheet(force = false) {
 // picked time can't be left behind unsaved.
 function saveViewing(id, v) {
   if (!v) return false;
+  if (viewingDraft.id === id) viewingDraft = { id: null, value: "" };  // it's being saved now
   if (cardOf(id).viewing?.at === v) return true;
   mutate(`Viewing time ${fmtWhen(v)}: ${shortAddr(listings[id].address)}`, b => {
     const c = touch(b, id);
@@ -932,12 +937,22 @@ function saveViewing(id, v) {
   });
   return true;
 }
-// Save when the picker closes (the ✓ / Done, or leaving the field), not on every
-// "change": iPhone fires change on each spin of the wheels, which saved a string of
-// in-between times while scrolling to the one you wanted.
-document.addEventListener("focusout", e => {
-  if (e.target.id === "viewing-input" && openId) saveViewing(openId, e.target.value);
-});
+// The iPhone picker's events are unpredictable (a change per wheel spin; "leaving the
+// field" sometimes on a minute spin, sometimes never), so picking a time never saves
+// by itself. It marks the time unsaved and lights up the Save button; closing the
+// panel saves an unsaved time so it can't be lost.
+let viewingDraft = { id: null, value: "" };
+function onViewingInput(e) {
+  if (e.target.id !== "viewing-input" || !openId) return;
+  const saved = (cardOf(openId).viewing?.at || "").slice(0, 16);
+  viewingDraft = e.target.value && e.target.value !== saved ? { id: openId, value: e.target.value } : { id: null, value: "" };
+  const btn = $("viewing-save"), dirty = viewingDraft.id === openId;
+  btn?.classList.toggle("primary", dirty);
+  const note = $("viewing-unsaved");
+  if (note) note.classList.toggle("hidden", !dirty);
+}
+document.addEventListener("input", onViewingInput);
+document.addEventListener("change", onViewingInput);
 
 function setStage(id, status) {
   const picked = openId === id ? $("viewing-input")?.value : "";
