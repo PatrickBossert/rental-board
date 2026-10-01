@@ -158,11 +158,11 @@ a { color: var(--accent); }
 .log .when { color: var(--muted); flex: none; min-width: 108px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 /* iPhone gives date inputs an intrinsic min-width wider than a phone panel; reset it */
-input[type=datetime-local] { -webkit-appearance: none; appearance: none; display: block; min-width: 0;
+input[type=datetime-local], input[type=date] { -webkit-appearance: none; appearance: none; display: block; min-width: 0;
   max-width: 100%; min-height: 46px; text-align: left; }
-input[type=datetime-local]::-webkit-date-and-time-value { text-align: left; }
+input[type=datetime-local]::-webkit-date-and-time-value, input[type=date]::-webkit-date-and-time-value { text-align: left; }
 .field { min-width: 0; }
-input[type=datetime-local], input[type=text], input[type=password], textarea, select {
+input[type=datetime-local], input[type=date], input[type=text], input[type=password], textarea, select {
   font-size: 16px; /* 16px stops iOS zooming in on focus */
   width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 11px 12px; }
 textarea { min-height: 88px; resize: vertical; }
@@ -895,7 +895,7 @@ function renderSheet(force = false) {
           `<button class="chip" data-pick="${esc(t.slice(0, 16))}">${esc(fmtWhen(t))}</button>`).join("")}</div>` : ""}
       <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the time, then tap Save viewing time.</div>
       <div class="small ${viewingVal && viewingVal !== savedVal ? "" : "hidden"}" id="viewing-unsaved" style="color:var(--warn);margin-bottom:6px">Not saved yet: tap Save viewing time.</div>
-      <div class="field"><input type="datetime-local" id="viewing-input" value="${esc(viewingVal)}"></div>
+      ${viewingFields(viewingVal)}
       <div class="btn-grid"><button class="btn ${viewingVal && viewingVal !== savedVal ? "primary" : ""}" id="viewing-save">Save viewing time</button>
         ${c.viewing ? `<button class="btn danger" id="viewing-clear">Remove</button>` : ""}</div>
       ${c.viewing?.at ? `<div class="small" style="margin-top:10px"><b>${esc(fmtWhen(c.viewing.at))}</b>
@@ -941,11 +941,44 @@ function saveViewing(id, v) {
 // field" sometimes on a minute spin, sometimes never), so picking a time never saves
 // by itself. It marks the time unsaved and lights up the Save button; closing the
 // panel saves an unsaved time so it can't be lost.
+// Date + hour + minutes in 5-minute steps. iPhone ignores `step` on its combined
+// date-and-time wheel (always 1-minute), but shows exactly the options of a <select>.
+const VIEWING_IDS = ["viewing-date", "viewing-hour", "viewing-min"];
+const VIEW_HOURS = Array.from({ length: 16 }, (_, i) => i + 6);           // 6am to 9pm
+const hourLabel = h => `${h % 12 || 12} ${h < 12 ? "am" : "pm"}`;
+function viewingFields(value) {
+  const [date, time = ""] = (value || "").split("T");
+  const [hh, mm] = time.split(":");
+  const hours = VIEW_HOURS.includes(+hh) || !hh ? VIEW_HOURS : [...VIEW_HOURS, +hh].sort((a, b) => a - b);
+  const mins = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, "0"));
+  if (mm && !mins.includes(mm)) mins.push(mm), mins.sort();               // keep an existing odd minute
+  return `<div class="field"><input type="date" id="viewing-date" value="${esc(date)}" aria-label="Viewing date"></div>
+    <div class="row" style="margin-top:8px">
+      <select id="viewing-hour" aria-label="Hour"><option value="">Hour</option>${hours.map(h =>
+        `<option value="${String(h).padStart(2, "0")}" ${+hh === h && hh !== undefined && hh !== "" ? "selected" : ""}>${hourLabel(h)}</option>`).join("")}</select>
+      <select id="viewing-min" aria-label="Minutes">${mins.map(m =>
+        `<option value="${m}" ${m === (mm || "00") ? "selected" : ""}>:${m}</option>`).join("")}</select>
+    </div>`;
+}
+function viewingValue() {
+  const d = $("viewing-date")?.value, h = $("viewing-hour")?.value, m = $("viewing-min")?.value;
+  return d && h ? `${d}T${h}:${m || "00"}` : "";
+}
+function setViewingFields(v) {   // e.g. from an open-inspection chip
+  const [date, time = ""] = v.split("T"), [hh, mm] = time.split(":");
+  $("viewing-date").value = date;
+  const hour = $("viewing-hour"), min = $("viewing-min");
+  if (![...hour.options].some(o => o.value === hh)) hour.add(new Option(hourLabel(+hh), hh));
+  hour.value = hh;
+  if (![...min.options].some(o => o.value === mm)) min.add(new Option(":" + mm, mm));
+  min.value = mm;
+}
 let viewingDraft = { id: null, value: "" };
 function onViewingInput(e) {
-  if (e.target.id !== "viewing-input" || !openId) return;
+  if (!VIEWING_IDS.includes(e.target.id) || !openId) return;
   const saved = (cardOf(openId).viewing?.at || "").slice(0, 16);
-  viewingDraft = e.target.value && e.target.value !== saved ? { id: openId, value: e.target.value } : { id: null, value: "" };
+  const v = viewingValue();
+  viewingDraft = v && v !== saved ? { id: openId, value: v } : { id: null, value: "" };
   const btn = $("viewing-save"), dirty = viewingDraft.id === openId;
   btn?.classList.toggle("primary", dirty);
   const note = $("viewing-unsaved");
@@ -955,7 +988,7 @@ document.addEventListener("input", onViewingInput);
 document.addEventListener("change", onViewingInput);
 
 function setStage(id, status) {
-  const picked = openId === id ? $("viewing-input")?.value : "";
+  const picked = openId === id ? viewingValue() : "";
   if (status === "viewing" && picked && !cardOf(id).viewing) { saveViewing(id, picked); return; }
   if (cardOf(id).status === status) return;
   mutate(`Moved to ${STAGE[status].label}: ${shortAddr(listings[id].address)}`, b => {
@@ -984,10 +1017,10 @@ document.addEventListener("click", e => {
   const stage = t.closest("[data-stage]");
   if (stage && openId) { setStage(openId, stage.dataset.stage); return; }
   const pick = t.closest("[data-pick]");
-  if (pick) { $("viewing-input").value = pick.dataset.pick; return; }
+  if (pick) { setViewingFields(pick.dataset.pick); onViewingInput({ target: $("viewing-date") }); return; }
   if (t.id === "viewing-save" && openId) {
-    const v = $("viewing-input").value;
-    if (!v) { $("viewing-input").focus(); toast("Pick a date and time first."); return; }
+    const v = viewingValue();
+    if (!v) { toast($("viewing-date").value ? "Pick an hour too." : "Pick a date and time first."); return; }
     if (cardOf(openId).viewing?.at === v) toast("That viewing time is already saved.");
     else saveViewing(openId, v);
     return;
