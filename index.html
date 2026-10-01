@@ -1060,7 +1060,14 @@ document.addEventListener("click", e => {
     });
     return;
   }
-  if (t.id === "ics" && openId) { downloadIcs(openId); return; }
+  if (t.id === "ics" && openId) {
+    // iPhone blocks calendar files a page builds itself; until the calendar service is set
+    // up, say so instead of silently doing nothing
+    const iPhone = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (iPhone) toast("On iPhone, Add to calendar needs the calendar service set up first. Google Calendar works meanwhile.");
+    else downloadIcs(openId);
+    return;
+  }
   if (t.id === "note-mic") { toggleDictation(); return; }
   if (t.closest("#check-now")) { checkNow(); return; }
   if (t.id === "note-save" && openId) {
