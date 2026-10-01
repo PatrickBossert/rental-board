@@ -84,6 +84,13 @@ a { color: var(--accent); }
   padding: 6px 12px; min-height: 36px; font-size: 13px; font-weight: 600; color: var(--accent);
   display: flex; align-items: center; gap: 6px; }
 .check-now:disabled { color: var(--muted); }
+.when-row { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, .85fr) 40px; gap: 6px; align-items: center; }
+.when-row.no-trash { grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, .85fr); }
+.when-row select { -webkit-appearance: none; appearance: none; text-align: center; text-align-last: center; padding: 10px 2px; }
+.when-row input[type=date] { padding-right: 4px; }
+.when-row input[type=date]::-webkit-calendar-picker-indicator { margin-left: 0; }
+.when-row input, .when-row select { padding: 10px 8px; min-width: 0; }
+.icon-btn.trash { color: var(--bad); }
 .divider { display: flex; flex-direction: column; gap: 2px; margin: 8px 2px 0; padding-top: 10px;
   border-top: 1.5px dashed var(--line); font-size: 12px; font-weight: 700; letter-spacing: .04em;
   text-transform: uppercase; color: var(--muted); }
@@ -829,6 +836,7 @@ function toggleDictation() {
 
 function closeSheet() {
   stopDictation();
+  clearTimeout(viewingTimer);
   if (openId && viewingDraft.id === openId) saveViewing(openId, viewingDraft.value);  // don't lose a picked time
   viewingDraft = { id: null, value: "" };
   openId = null; prefsOpen = false; sheetKey = null;
@@ -839,6 +847,7 @@ function closeSheet() {
 let sheetKey = null;
 function renderSheet(force = false) {
   const id = openId, l = listings[id]; if (!l) return closeSheet();
+  if (!force && pickerOpen()) return;  // never redraw under an open date/hour/minute picker
   const c = cardOf(id), a = l.agent || {};
   // only redraw when this listing changed, so a save elsewhere doesn't close the keyboard
   const key = JSON.stringify([id, c, l, cfg.name]);
@@ -893,11 +902,8 @@ function renderSheet(force = false) {
       ${upcoming.length ? `<div class="small muted" style="margin-bottom:6px">Open inspections</div>
         <div class="chips" style="margin-bottom:10px">${upcoming.slice(0, 4).map(t =>
           `<button class="chip" data-pick="${esc(t.slice(0, 16))}">${esc(fmtWhen(t))}</button>`).join("")}</div>` : ""}
-      <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the time, then tap Save viewing time.</div>
-      <div class="small ${viewingVal && viewingVal !== savedVal ? "" : "hidden"}" id="viewing-unsaved" style="color:var(--warn);margin-bottom:6px">Not saved yet: tap Save viewing time.</div>
-      ${viewingFields(viewingVal)}
-      <div class="btn-grid"><button class="btn ${viewingVal && viewingVal !== savedVal ? "primary" : ""}" id="viewing-save">Save viewing time</button>
-        ${c.viewing ? `<button class="btn danger" id="viewing-clear">Remove</button>` : ""}</div>
+      <div class="small muted" style="margin-bottom:6px">Arranged a viewing with the agent? Pick the date and time; it saves when you tap ✓.</div>
+      ${viewingFields(viewingVal, !!c.viewing)}
       ${c.viewing?.at ? `<div class="small" style="margin-top:10px"><b>${esc(fmtWhen(c.viewing.at))}</b>
           ${c.viewing.by ? `<span class="muted"> · added by ${esc(c.viewing.by)}</span>` : ""}</div>
         <div class="btn-grid"><button class="btn" id="ics">📅 Add to calendar</button>
@@ -945,19 +951,20 @@ function saveViewing(id, v) {
 // date-and-time wheel (always 1-minute), but shows exactly the options of a <select>.
 const VIEWING_IDS = ["viewing-date", "viewing-hour", "viewing-min"];
 const VIEW_HOURS = Array.from({ length: 16 }, (_, i) => i + 6);           // 6am to 9pm
-const hourLabel = h => `${h % 12 || 12} ${h < 12 ? "am" : "pm"}`;
-function viewingFields(value) {
+const hourLabel = h => `${h % 12 || 12}${h < 12 ? "am" : "pm"}`;
+function viewingFields(value, removable = false) {
   const [date, time = ""] = (value || "").split("T");
   const [hh, mm] = time.split(":");
   const hours = VIEW_HOURS.includes(+hh) || !hh ? VIEW_HOURS : [...VIEW_HOURS, +hh].sort((a, b) => a - b);
   const mins = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, "0"));
   if (mm && !mins.includes(mm)) mins.push(mm), mins.sort();               // keep an existing odd minute
-  return `<div class="field"><input type="date" id="viewing-date" value="${esc(date)}" aria-label="Viewing date"></div>
-    <div class="row" style="margin-top:8px">
+  return `<div class="when-row ${removable ? "" : "no-trash"}">
+      <input type="date" id="viewing-date" value="${esc(date)}" aria-label="Viewing date">
       <select id="viewing-hour" aria-label="Hour"><option value="">Hour</option>${hours.map(h =>
-        `<option value="${String(h).padStart(2, "0")}" ${+hh === h && hh !== undefined && hh !== "" ? "selected" : ""}>${hourLabel(h)}</option>`).join("")}</select>
+        `<option value="${String(h).padStart(2, "0")}" ${hh !== undefined && hh !== "" && +hh === h ? "selected" : ""}>${hourLabel(h)}</option>`).join("")}</select>
       <select id="viewing-min" aria-label="Minutes">${mins.map(m =>
         `<option value="${m}" ${m === (mm || "00") ? "selected" : ""}>:${m}</option>`).join("")}</select>
+      ${removable ? `<button class="icon-btn trash" id="viewing-clear" aria-label="Remove viewing">🗑</button>` : ""}
     </div>`;
 }
 function viewingValue() {
@@ -974,18 +981,26 @@ function setViewingFields(v) {   // e.g. from an open-inspection chip
   min.value = mm;
 }
 let viewingDraft = { id: null, value: "" };
+const VIEWING_SAVE_DELAY = 1200;   // ms after the last ✓, so hour-then-minutes is one save
+let viewingTimer = null;
 function onViewingInput(e) {
   if (!VIEWING_IDS.includes(e.target.id) || !openId) return;
   const saved = (cardOf(openId).viewing?.at || "").slice(0, 16);
   const v = viewingValue();
   viewingDraft = v && v !== saved ? { id: openId, value: v } : { id: null, value: "" };
-  const btn = $("viewing-save"), dirty = viewingDraft.id === openId;
-  btn?.classList.toggle("primary", dirty);
-  const note = $("viewing-unsaved");
-  if (note) note.classList.toggle("hidden", !dirty);
+  clearTimeout(viewingTimer);
+  if (e.type === "change" && viewingDraft.id) {
+    const { id, value } = viewingDraft;
+    viewingTimer = setTimeout(() => { if (viewingDraft.id === id) saveViewing(id, value); }, VIEWING_SAVE_DELAY);
+  }
 }
 document.addEventListener("input", onViewingInput);
 document.addEventListener("change", onViewingInput);
+// a redraw replaces the fields and would close an open picker: wait until it closes
+const pickerOpen = () => VIEWING_IDS.includes(document.activeElement?.id);
+document.addEventListener("focusout", e => {
+  if (VIEWING_IDS.includes(e.target.id) && openId) setTimeout(() => { if (!pickerOpen() && openId) renderSheet(); }, 50);
+});
 
 function setStage(id, status) {
   const picked = openId === id ? viewingValue() : "";
@@ -1018,13 +1033,6 @@ document.addEventListener("click", e => {
   if (stage && openId) { setStage(openId, stage.dataset.stage); return; }
   const pick = t.closest("[data-pick]");
   if (pick) { setViewingFields(pick.dataset.pick); onViewingInput({ target: $("viewing-date") }); return; }
-  if (t.id === "viewing-save" && openId) {
-    const v = viewingValue();
-    if (!v) { toast($("viewing-date").value ? "Pick an hour too." : "Pick a date and time first."); return; }
-    if (cardOf(openId).viewing?.at === v) toast("That viewing time is already saved.");
-    else saveViewing(openId, v);
-    return;
-  }
   if (t.id === "viewing-clear" && openId) {
     const id = openId;
     mutate(`Viewing removed: ${shortAddr(listings[id].address)}`, b => {
